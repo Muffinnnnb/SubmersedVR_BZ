@@ -24,7 +24,7 @@ namespace SubmersedVR
     {
         public static void Postfix()
         {
-            VRUtil.Recenter();
+            if (Settings.AutoRecenterOnVehicleEnter) VRUtil.Recenter();
         }
     }
 
@@ -33,7 +33,7 @@ namespace SubmersedVR
     {
         public static void Postfix()
         {
-            VRUtil.Recenter();
+            if (Settings.AutoRecenterOnVehicleEnter) VRUtil.Recenter();
         }
     }
 
@@ -42,7 +42,7 @@ namespace SubmersedVR
     {
         public static void Postfix()
         {
-            VRUtil.Recenter();
+            if (Settings.AutoRecenterOnVehicleEnter) VRUtil.Recenter();
         }
     }
 
@@ -51,7 +51,7 @@ namespace SubmersedVR
     {
         public static void Postfix()
         {
-            VRUtil.Recenter();
+            if (Settings.AutoRecenterOnVehicleEnter) VRUtil.Recenter();
         }
     }
 

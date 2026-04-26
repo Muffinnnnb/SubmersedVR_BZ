@@ -1,6 +1,7 @@
 using System;
 using HarmonyLib;
 using UnityEngine;
+using UnityEngine.UI;
 using TMPro;
 
 namespace SubmersedVR
@@ -14,11 +15,16 @@ namespace SubmersedVR
     // Tweaks regarding the HUD of the game
     static class VRHud
     {
-        private static Transform screenCanvas;
+        internal static Transform screenCanvas;
         private static Transform overlayCanvas;
         private static Transform hud;
 
         private static Canvas staticHudCanvas = null;
+        private static Canvas vehicleHudCanvas = null;
+        private static Canvas subtitleCanvas = null;
+        private static bool curveRefreshSubscribed = false;
+        private static int curveRefreshTick = 0;
+        private const int DynamicCurveRefreshInterval = 30;
         // private static OffsetCalibrationTool calibrationTool;
 
         public static void HideOverlays()
@@ -71,7 +77,6 @@ namespace SubmersedVR
         public static void SetupHandReticleLaserPointer(Camera uiCamera, Transform rightControllerUI)
         {
             var handReticle = HandReticle.main.gameObject.WithParent(VRCameraRig.instance.laserPointerUI.pointerDot.transform);
-            handReticle.transform.LookAt(uiCamera.transform.position);
             handReticle.transform.localRotation = Quaternion.Euler(40, 0, 0);
             handReticle.transform.localPosition = new Vector3(0, -5, VRCameraRig.instance.laserPointerUI.pointerDot.transform.localPosition.z);//new Vector3(0, 0, 0.05f);
             handReticle.transform.localScale = VRCameraRig.instance.laserPointerUI.pointerDot.transform.localScale * 2;//new Vector3(0.001f, 0.001f, 0.001f);
@@ -85,6 +90,257 @@ namespace SubmersedVR
                 return;
             }
             SetupHandReticle(onLaserPointer, rig.uiCamera, rig.rightControllerUI.transform);
+        }
+
+        private static Vector3 FootHudPosition() =>
+            new Vector3(0.0f, 0.1f + Settings.HudVerticalOffset, 1.0f + Settings.HudDistance);
+
+        private static Vector3 VehicleHudPosition() =>
+            new Vector3(0.0f, 0.1f + Settings.VehicleHudVerticalOffset, 1.0f + Settings.VehicleHudDistance);
+
+        private static Vector3 SubtitlePosition() =>
+            Settings.SubtitleSyncWithHud
+                ? FootHudPosition()
+                : new Vector3(0.0f, 0.1f + Settings.SubtitleVerticalOffset, 1.0f + Settings.SubtitleDistance);
+
+        public static void OnHudVerticalOffsetChanged(float value)
+        {
+            if (staticHudCanvas == null) return;
+            staticHudCanvas.transform.localPosition = FootHudPosition();
+            if (Settings.SubtitleSyncWithHud) UpdateSubtitleTransform();
+        }
+
+        public static void OnHudScaleChanged(float value)
+        {
+            if (staticHudCanvas == null) return;
+            staticHudCanvas.transform.localScale = Vector3.one * 0.00085f * value;
+            RefreshFootCurve();
+            if (Settings.SubtitleSyncWithHud) UpdateSubtitleTransform();
+        }
+
+        public static void OnHudDistanceChanged(float value)
+        {
+            if (staticHudCanvas == null) return;
+            staticHudCanvas.transform.localPosition = FootHudPosition();
+            if (Settings.SubtitleSyncWithHud) UpdateSubtitleTransform();
+        }
+
+        public static void OnVehicleHudVerticalOffsetChanged(float value)
+        {
+            if (vehicleHudCanvas == null) return;
+            vehicleHudCanvas.transform.localPosition = VehicleHudPosition();
+        }
+
+        public static void OnVehicleHudScaleChanged(float value)
+        {
+            if (vehicleHudCanvas == null) return;
+            vehicleHudCanvas.transform.localScale = Vector3.one * 0.00085f * value;
+            RefreshVehicleCurve();
+        }
+
+        public static void OnVehicleHudDistanceChanged(float value)
+        {
+            if (vehicleHudCanvas == null) return;
+            vehicleHudCanvas.transform.localPosition = VehicleHudPosition();
+        }
+
+        private static void ApplyCurve(Canvas canvas, bool curved, float worldRadius, float canvasBaseScale)
+        {
+            if (canvas == null) return;
+            float rPx = curved ? worldRadius / canvasBaseScale : 0f;
+            var curveGroups = new HashSet<Transform>();
+            foreach (var g in canvas.GetComponentsInChildren<Graphic>(true))
+            {
+                if (HudCurveDebug.ShouldSkipCurve(g.transform, canvas.transform))
+                {
+                    DisableCurveEffects(g);
+                    continue;
+                }
+
+                Transform curveGroup = HudCurveDebug.GetCurveTransformRoot(g.transform, canvas.transform);
+                if (curveGroup != null && curveGroups.Add(curveGroup))
+                {
+                    var groupEffect = curveGroup.gameObject.GetOrAddComponent<HudCurveTransformEffect>();
+                    groupEffect.targetCanvas = canvas;
+                    if (groupEffect.radiusPixels != rPx)
+                    {
+                        groupEffect.radiusPixels = rPx;
+                        groupEffect.ForceApply();
+                    }
+                }
+
+                if (g is TMPro.TextMeshProUGUI tmpText)
+                {
+                    var effect = g.gameObject.GetOrAddComponent<TmpHudCurveEffect>();
+                    effect.targetCanvas = canvas;
+                    if (effect.radiusPixels != rPx)
+                    {
+                        effect.radiusPixels = rPx;
+                        effect.ForceApply("radiusChanged");
+                    }
+                }
+                else
+                {
+                    var effect = g.gameObject.GetOrAddComponent<HudCurveEffect>();
+                    effect.targetCanvas = canvas;
+                    if (effect.radiusPixels != rPx)
+                    {
+                        effect.radiusPixels = rPx;
+                        g.SetVerticesDirty();
+                    }
+                }
+            }
+        }
+
+        private static void DisableCurveEffects(Graphic g)
+        {
+            var graphicEffect = g.GetComponent<HudCurveEffect>();
+            if (graphicEffect != null && graphicEffect.radiusPixels != 0f)
+            {
+                graphicEffect.radiusPixels = 0f;
+                g.SetVerticesDirty();
+            }
+
+            if (g is TMPro.TextMeshProUGUI tmpText)
+            {
+                var tmpEffect = tmpText.GetComponent<TmpHudCurveEffect>();
+                if (tmpEffect != null && tmpEffect.radiusPixels != 0f)
+                {
+                    tmpEffect.radiusPixels = 0f;
+                    tmpEffect.ForceApply("skipCurve");
+                }
+            }
+        }
+
+        private static void RefreshFootCurve() =>
+            ApplyCurve(staticHudCanvas, Settings.HudCurved, Settings.HudCurveRadius, 0.00085f * Settings.HudScale);
+
+        private static void RefreshVehicleCurve() =>
+            ApplyCurve(vehicleHudCanvas, Settings.VehicleHudCurved, Settings.VehicleHudCurveRadius, 0.00085f * Settings.VehicleHudScale);
+
+        private static void RefreshSubtitleCurve()
+        {
+            float scale = Settings.SubtitleSyncWithHud ? Settings.HudScale : Settings.SubtitleScale;
+            ApplyCurve(subtitleCanvas, Settings.HudCurved, Settings.HudCurveRadius, 0.00085f * scale);
+        }
+
+        private static Transform GetFootHudParent()
+        {
+            var rig = VRCameraRig.instance;
+            if (rig == null) return null;
+            if (Settings.HudFollowHead)
+            {
+                // mainCamera tracks the HMD pose; uiCamera tracks body direction only
+                return SNCameraRoot.main?.mainCamera?.transform ?? rig.uiCamera.transform;
+            }
+            return rig.uiRig.transform;
+        }
+
+        private static Camera GetFootHudCamera()
+        {
+            if (Settings.HudFollowHead)
+                return SNCameraRoot.main?.mainCamera ?? VRCameraRig.instance.uiCamera;
+            return VRCameraRig.instance.uiCamera;
+        }
+
+        public static void OnHudFollowHeadChanged(bool followHead)
+        {
+            var parent = GetFootHudParent();
+            if (staticHudCanvas == null || parent == null) return;
+            staticHudCanvas.transform.SetParent(parent, false);
+            staticHudCanvas.worldCamera = GetFootHudCamera();
+            staticHudCanvas.transform.localPosition = FootHudPosition();
+            staticHudCanvas.transform.localRotation = Quaternion.identity;
+        }
+
+        public static void OnHudCurvedChanged(bool curved)
+        {
+            RefreshFootCurve();
+            RefreshSubtitleCurve();
+        }
+
+        public static void OnHudCurveRadiusChanged(float r)
+        {
+            RefreshFootCurve();
+            RefreshSubtitleCurve();
+        }
+
+        public static void OnVehicleHudCurvedChanged(bool curved) => RefreshVehicleCurve();
+        public static void OnVehicleHudCurveRadiusChanged(float r) => RefreshVehicleCurve();
+
+        private static void EnsureDynamicCurveRefresh()
+        {
+            if (curveRefreshSubscribed) return;
+            Canvas.willRenderCanvases += OnWillRenderCurveRefresh;
+            curveRefreshSubscribed = true;
+        }
+
+        private static void OnWillRenderCurveRefresh()
+        {
+            curveRefreshTick++;
+            if (curveRefreshTick % DynamicCurveRefreshInterval != 0) return;
+
+            if (Settings.HudCurved && staticHudCanvas != null)
+                RefreshFootCurve();
+            if (Settings.HudCurved && subtitleCanvas != null)
+                RefreshSubtitleCurve();
+            if (Settings.VehicleHudCurved && vehicleHudCanvas != null)
+                RefreshVehicleCurve();
+        }
+
+        private static void UpdateSubtitleTransform()
+        {
+            if (subtitleCanvas == null) return;
+            subtitleCanvas.transform.localPosition = SubtitlePosition();
+            float scale = Settings.SubtitleSyncWithHud ? Settings.HudScale : Settings.SubtitleScale;
+            subtitleCanvas.transform.localScale = Vector3.one * 0.00085f * scale;
+            RefreshSubtitleCurve();
+        }
+
+        public static void OnSubtitleSyncChanged(bool sync) => UpdateSubtitleTransform();
+        public static void OnSubtitleVerticalOffsetChanged(float value) { if (!Settings.SubtitleSyncWithHud) UpdateSubtitleTransform(); }
+        public static void OnSubtitleScaleChanged(float value) { if (!Settings.SubtitleSyncWithHud) UpdateSubtitleTransform(); }
+        public static void OnSubtitleDistanceChanged(float value) { if (!Settings.SubtitleSyncWithHud) UpdateSubtitleTransform(); }
+
+        private static void MoveDialogueElementsToSubtitleCanvas()
+        {
+            if (screenCanvas == null || subtitleCanvas == null) return;
+
+            Mod.logger.LogInfo("[VRHud] screenCanvas top-level children (before move):");
+            foreach (Transform child in screenCanvas)
+            {
+                Mod.logger.LogInfo($"  '{child.name}' active={child.gameObject.activeSelf}");
+                foreach (Transform grandchild in child)
+                    Mod.logger.LogInfo($"    └─ '{grandchild.name}' active={grandchild.gameObject.activeSelf}");
+            }
+
+            var toMove = new List<Transform>();
+            foreach (Transform child in screenCanvas)
+            {
+                var lower = child.name.ToLower();
+                if (lower.Contains("subtitle") || lower.Contains("caption") ||
+                    lower.Contains("dialogue") || lower.Contains("speaker") ||
+                    lower.Contains("portrait") || lower.Contains("story") ||
+                    lower.Contains("talking"))  // TalkingHead = 대화 캐릭터 초상화/이름
+                {
+                    toMove.Add(child);
+                }
+            }
+
+            if (toMove.Count == 0)
+            {
+                Mod.logger.LogInfo("[VRHud] No dialogue elements found to move.");
+            }
+            else
+            {
+                foreach (var t in toMove)
+                {
+                    Mod.logger.LogInfo($"[VRHud] Moving to subtitleCanvas: '{t.name}'");
+                    t.SetParent(subtitleCanvas.transform, false);
+                }
+            }
+
+            RefreshSubtitleCurve();
         }
 
         public static Canvas CreateWorldCanvas(this GameObject go)
@@ -105,29 +361,104 @@ namespace SubmersedVR
 
             if (staticHudCanvas == null)
             {
-                var uiRig = VRCameraRig.instance.uiRig.transform;
-                var go = new GameObject("StaticHUDCanvas").WithParent(uiRig);
+                var parent = GetFootHudParent() ?? VRCameraRig.instance.uiRig.transform;
+                var go = new GameObject("StaticHUDCanvas").WithParent(parent);
                 staticHudCanvas = go.CreateWorldCanvas();
                 var rt = go.GetComponent<RectTransform>();
                 go.transform.localScale = screenCanvas.localScale;
                 rt.sizeDelta = screenCanvas.GetComponent<RectTransform>().sizeDelta;
                 rt.anchoredPosition = screenCanvas.GetComponent<RectTransform>().anchoredPosition;
-                go.transform.localPosition = Vector3.forward + new Vector3(0.0f, 0.1f, 0.0f);
+                go.transform.localPosition = FootHudPosition();
                 go.transform.localRotation = Quaternion.identity;
             }
-            staticHudCanvas.worldCamera = uiCamera;
+            else
+            {
+                var parent = GetFootHudParent() ?? VRCameraRig.instance.uiRig.transform;
+                staticHudCanvas.transform.SetParent(parent, false);
+                staticHudCanvas.transform.localPosition = FootHudPosition();
+                staticHudCanvas.transform.localRotation = Quaternion.identity;
+            }
+            staticHudCanvas.worldCamera = GetFootHudCamera();
+
+            if (vehicleHudCanvas == null)
+            {
+                var uiRig = VRCameraRig.instance.uiRig.transform;
+                var go = new GameObject("VehicleHUDCanvas").WithParent(uiRig);
+                vehicleHudCanvas = go.CreateWorldCanvas();
+                var rt = go.GetComponent<RectTransform>();
+                go.transform.localScale = screenCanvas.localScale;
+                rt.sizeDelta = screenCanvas.GetComponent<RectTransform>().sizeDelta;
+                rt.anchoredPosition = screenCanvas.GetComponent<RectTransform>().anchoredPosition;
+                go.transform.localPosition = VehicleHudPosition();
+                go.transform.localRotation = Quaternion.identity;
+            }
+            vehicleHudCanvas.worldCamera = uiCamera;
+
+            if (subtitleCanvas == null)
+            {
+                var uiRig = VRCameraRig.instance.uiRig.transform;
+                var go = new GameObject("SubtitleCanvas").WithParent(uiRig);
+                subtitleCanvas = go.CreateWorldCanvas();
+                var rt = go.GetComponent<RectTransform>();
+                rt.sizeDelta = screenCanvas.GetComponent<RectTransform>().sizeDelta;
+                rt.anchoredPosition = screenCanvas.GetComponent<RectTransform>().anchoredPosition;
+                go.transform.localRotation = Quaternion.identity;
+            }
+            subtitleCanvas.worldCamera = uiCamera;
+
+            MoveDialogueElementsToSubtitleCanvas();
 
             screenCanvas.SetParent(uiCamera.transform, true);
             overlayCanvas.SetParent(uiCamera.transform, true);
+            hud.SetParent(staticHudCanvas.transform, false);
 
             //Makes the UI more comfortable to view
             screenCanvas.transform.localScale = new Vector3(0.00072f, 0.00072f, 0.00072f);
             overlayCanvas.transform.localScale = new Vector3(0.00032f, 0.00032f, 0.00032f);
-            staticHudCanvas.transform.localScale = new Vector3(0.00085f, 0.00085f, 0.00085f);
+            staticHudCanvas.transform.localScale = Vector3.one * 0.00085f * Settings.HudScale;
+            vehicleHudCanvas.transform.localScale = Vector3.one * 0.00085f * Settings.VehicleHudScale;
+            UpdateSubtitleTransform();
+
+            RefreshFootCurve();
+            RefreshVehicleCurve();
+            RefreshSubtitleCurve();
+            EnsureDynamicCurveRefresh();
 
             SetupHandReticle(Settings.PutHandReticleOnLaserPointer, uiCamera, rightControllerUI);
             Settings.PutHandReticleOnLaserPointerChanged -= OnHandReticleSettingChanged;
             Settings.PutHandReticleOnLaserPointerChanged += OnHandReticleSettingChanged;
+
+            Settings.HudVerticalOffsetChanged -= OnHudVerticalOffsetChanged;
+            Settings.HudVerticalOffsetChanged += OnHudVerticalOffsetChanged;
+            Settings.HudScaleChanged -= OnHudScaleChanged;
+            Settings.HudScaleChanged += OnHudScaleChanged;
+            Settings.HudDistanceChanged -= OnHudDistanceChanged;
+            Settings.HudDistanceChanged += OnHudDistanceChanged;
+            Settings.VehicleHudVerticalOffsetChanged -= OnVehicleHudVerticalOffsetChanged;
+            Settings.VehicleHudVerticalOffsetChanged += OnVehicleHudVerticalOffsetChanged;
+            Settings.VehicleHudScaleChanged -= OnVehicleHudScaleChanged;
+            Settings.VehicleHudScaleChanged += OnVehicleHudScaleChanged;
+            Settings.VehicleHudDistanceChanged -= OnVehicleHudDistanceChanged;
+            Settings.VehicleHudDistanceChanged += OnVehicleHudDistanceChanged;
+            Settings.HudFollowHeadChanged -= OnHudFollowHeadChanged;
+            Settings.HudFollowHeadChanged += OnHudFollowHeadChanged;
+            Settings.HudCurvedChanged -= OnHudCurvedChanged;
+            Settings.HudCurvedChanged += OnHudCurvedChanged;
+            Settings.HudCurveRadiusChanged -= OnHudCurveRadiusChanged;
+            Settings.HudCurveRadiusChanged += OnHudCurveRadiusChanged;
+            Settings.VehicleHudCurvedChanged -= OnVehicleHudCurvedChanged;
+            Settings.VehicleHudCurvedChanged += OnVehicleHudCurvedChanged;
+            Settings.VehicleHudCurveRadiusChanged -= OnVehicleHudCurveRadiusChanged;
+            Settings.VehicleHudCurveRadiusChanged += OnVehicleHudCurveRadiusChanged;
+
+            Settings.SubtitleSyncWithHudChanged -= OnSubtitleSyncChanged;
+            Settings.SubtitleSyncWithHudChanged += OnSubtitleSyncChanged;
+            Settings.SubtitleVerticalOffsetChanged -= OnSubtitleVerticalOffsetChanged;
+            Settings.SubtitleVerticalOffsetChanged += OnSubtitleVerticalOffsetChanged;
+            Settings.SubtitleScaleChanged -= OnSubtitleScaleChanged;
+            Settings.SubtitleScaleChanged += OnSubtitleScaleChanged;
+            Settings.SubtitleDistanceChanged -= OnSubtitleDistanceChanged;
+            Settings.SubtitleDistanceChanged += OnSubtitleDistanceChanged;
 
             WristHud.Setup();
 
@@ -141,13 +472,15 @@ namespace SubmersedVR
             var player = Player.main;
             if (player != null)
             {
-                hud.SetParent(staticHudCanvas.transform, false);
+                hud.SetParent(vehicleHudCanvas.transform, false);
+                RefreshVehicleCurve();
             }
         }
 
         public static void OnExitVehicle()
         {
-            hud.SetParent(screenCanvas, false);
+            hud.SetParent(staticHudCanvas.transform, false);
+            RefreshFootCurve();
         }
     }
 
@@ -374,6 +707,733 @@ namespace SubmersedVR
                 entry.enabled = false;
             }
 
+        }
+    }
+
+    internal static class HudCurveDebug
+    {
+        public static bool IsStatusIconPath(Transform transform, Transform stop)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.name == "Icon")
+                    return true;
+                current = current.parent;
+            }
+            return false;
+        }
+
+        public static Transform GetStatusBarIconRoot(Transform transform, Transform stop)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.name == "Icon" && current.parent != null && current.parent.name.EndsWith("Bar"))
+                {
+                    Transform parent = current.parent;
+                    while (parent != null && parent != stop)
+                    {
+                        if (parent.name == "BarsPanel")
+                            return current;
+                        parent = parent.parent;
+                    }
+                }
+                current = current.parent;
+            }
+            return null;
+        }
+
+        public static bool IsStatusBarIconPath(Transform transform, Transform stop) =>
+            GetStatusBarIconRoot(transform, stop) != null;
+
+        public static Transform GetCurveTransformRoot(Transform transform, Transform stop)
+        {
+            Transform statusRoot = GetStatusBarIconRoot(transform, stop);
+            if (statusRoot != null) return statusRoot;
+            return null;
+        }
+
+        public static bool IsCurveTransformPath(Transform transform, Transform stop) =>
+            GetCurveTransformRoot(transform, stop) != null;
+
+        public static bool IsAnimationSensitivePath(Transform transform, Transform stop)
+        {
+            if (IsUnderNamedParent(transform, stop, "PinnedRecipes"))
+                return false;
+
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                string name = current.name;
+                if (name.StartsWith("RecipeItem") || name.StartsWith("RecipeEntry"))
+                    return true;
+                current = current.parent;
+            }
+            return IsCurveTransformPath(transform, stop);
+        }
+
+        public static bool IsUnderNamedParent(Transform transform, Transform stop, string parentName)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.name == parentName)
+                    return true;
+                current = current.parent;
+            }
+            return false;
+        }
+
+        public static bool ShouldSkipCurve(Transform transform, Transform stop)
+        {
+            return IsUnderNamedParent(transform, stop, "ScannerIcon") ||
+                   IsUnderNamedParent(transform, stop, "HandReticle");
+        }
+
+        public static string BuildPath(Transform transform, Transform stop)
+        {
+            var names = new List<string>();
+            Transform current = transform;
+            while (current != null)
+            {
+                names.Add(current.name);
+                if (current == stop) break;
+                current = current.parent;
+            }
+            names.Reverse();
+            return string.Join("/", names.ToArray());
+        }
+
+        public static string BuildChainSnapshot(Transform transform, Transform stop)
+        {
+            var parts = new List<string>();
+            Transform current = transform;
+            int depth = 0;
+            while (current != null && current != stop && depth < 8)
+            {
+                var rt = current as RectTransform;
+                Vector3 lp = current.localPosition;
+                Vector3 lr = current.localEulerAngles;
+                Vector3 ls = current.localScale;
+                string item = $"{current.name}:lp=({lp.x:F1},{lp.y:F1},{lp.z:F1}) lr=({lr.x:F1},{lr.y:F1},{lr.z:F1}) ls=({ls.x:F3},{ls.y:F3},{ls.z:F3})";
+                if (rt != null)
+                {
+                    Vector3 ap = rt.anchoredPosition3D;
+                    Rect rect = rt.rect;
+                    item += $" ap=({ap.x:F1},{ap.y:F1},{ap.z:F1}) size=({rect.width:F1},{rect.height:F1})";
+                }
+                parts.Add(item);
+                current = current.parent;
+                depth++;
+            }
+            return string.Join(" <- ", parts.ToArray());
+        }
+    }
+
+    // Moves a whole status icon card onto the cylinder while child meshes keep only relative curvature.
+    public class HudCurveTransformEffect : MonoBehaviour
+    {
+        public Canvas targetCanvas;
+        public float radiusPixels = 0f;
+        private Vector3 appliedLocalOffset = Vector3.zero;
+        private Transform cachedTransform;
+
+        void Awake() => cachedTransform = transform;
+
+        void OnEnable()
+        {
+            Canvas.willRenderCanvases += OnWillRenderCanvases;
+            ForceApply();
+        }
+
+        void OnDisable()
+        {
+            Canvas.willRenderCanvases -= OnWillRenderCanvases;
+            RemoveAppliedOffset();
+        }
+
+        private void OnWillRenderCanvases() => ForceApply();
+
+        public void ForceApply()
+        {
+            if (cachedTransform == null) cachedTransform = transform;
+            RemoveAppliedOffset();
+            if (!enabled || radiusPixels <= 0f || targetCanvas == null || cachedTransform.parent == null) return;
+
+            Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(cachedTransform.position);
+            float angle = pivotCanvas.x / radiusPixels;
+            float targetX = radiusPixels * Mathf.Sin(angle);
+            float targetZ = -radiusPixels * (1f - Mathf.Cos(angle));
+            Vector3 canvasDelta = new Vector3(targetX - pivotCanvas.x, 0f, targetZ);
+            Vector3 worldDelta = targetCanvas.transform.TransformVector(canvasDelta);
+            appliedLocalOffset = cachedTransform.parent.InverseTransformVector(worldDelta);
+            cachedTransform.localPosition += appliedLocalOffset;
+        }
+
+        private void RemoveAppliedOffset()
+        {
+            if (cachedTransform == null) cachedTransform = transform;
+            if (appliedLocalOffset == Vector3.zero) return;
+            cachedTransform.localPosition -= appliedLocalOffset;
+            appliedLocalOffset = Vector3.zero;
+        }
+    }
+
+    // Applies cylindrical curve distortion to a UI Graphic's mesh vertices.
+    // Canvas-space x is mapped to a cylinder of radius radiusPixels (canvas pixel units).
+    public class HudCurveEffect : BaseMeshEffect
+    {
+        public Canvas targetCanvas;
+        public float radiusPixels = 0f;
+        private int debugLogCount = 0;
+        private bool debugPathLogged = false;
+        private int lastInputVertexCount = 0;
+        private int lastSubdivideSegments = 1;
+        private const int MaxGraphicDebugLogs = 40;
+        private const int MaxGraphicCurveSegments = 48;
+        private const float GraphicCurveSegmentWidth = 16f;
+
+        public override void ModifyMesh(VertexHelper vh)
+        {
+            if (!IsActive() || radiusPixels <= 0f || targetCanvas == null) return;
+
+            if (HudCurveDebug.IsCurveTransformPath(graphic.transform, targetCanvas.transform))
+            {
+                ModifyMeshRelative(vh);
+                return;
+            }
+
+            var graphicToCanvas = targetCanvas.transform.worldToLocalMatrix
+                                  * graphic.transform.localToWorldMatrix;
+            var canvasToGraphic = graphicToCanvas.inverse;
+
+            var verts = new System.Collections.Generic.List<UIVertex>();
+            vh.GetUIVertexStream(verts);
+            verts = SubdivideMeshByX(verts, GetLocalToCanvasScale());
+            bool hasBeforeBounds = false;
+            bool hasAfterBounds = false;
+            float beforeMinX = 0f, beforeMaxX = 0f, beforeMinZ = 0f, beforeMaxZ = 0f;
+            float afterMinX = 0f, afterMaxX = 0f, afterMinZ = 0f, afterMaxZ = 0f;
+            for (int i = 0; i < verts.Count; i++)
+            {
+                UIVertex v = verts[i];
+                Vector3 before = v.position;
+                if (!hasBeforeBounds)
+                {
+                    beforeMinX = beforeMaxX = before.x;
+                    beforeMinZ = beforeMaxZ = before.z;
+                    hasBeforeBounds = true;
+                }
+                else
+                {
+                    beforeMinX = Mathf.Min(beforeMinX, before.x);
+                    beforeMaxX = Mathf.Max(beforeMaxX, before.x);
+                    beforeMinZ = Mathf.Min(beforeMinZ, before.z);
+                    beforeMaxZ = Mathf.Max(beforeMaxZ, before.z);
+                }
+
+                Vector3 cp = graphicToCanvas.MultiplyPoint3x4(v.position);
+                float angle = cp.x / radiusPixels;
+                cp.x = radiusPixels * Mathf.Sin(angle);
+                cp.z -= radiusPixels * (1f - Mathf.Cos(angle));
+                v.position = canvasToGraphic.MultiplyPoint3x4(cp);
+                Vector3 after = v.position;
+                if (!hasAfterBounds)
+                {
+                    afterMinX = afterMaxX = after.x;
+                    afterMinZ = afterMaxZ = after.z;
+                    hasAfterBounds = true;
+                }
+                else
+                {
+                    afterMinX = Mathf.Min(afterMinX, after.x);
+                    afterMaxX = Mathf.Max(afterMaxX, after.x);
+                    afterMinZ = Mathf.Min(afterMinZ, after.z);
+                    afterMaxZ = Mathf.Max(afterMaxZ, after.z);
+                }
+                verts[i] = v;
+            }
+            vh.Clear();
+            vh.AddUIVertexTriangleStream(verts);
+
+            LogDebugSample(verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+                afterMinX, afterMaxX, afterMinZ, afterMaxZ);
+        }
+
+        private void ModifyMeshRelative(VertexHelper vh)
+        {
+            float localToCanvasScale = GetLocalToCanvasScale();
+            if (Mathf.Approximately(localToCanvasScale, 0f)) return;
+
+            Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(graphic.transform.position);
+            float pivotAngle = pivotCanvas.x / radiusPixels;
+            float pivotTargetX = radiusPixels * Mathf.Sin(pivotAngle);
+            float pivotTargetZ = -radiusPixels * (1f - Mathf.Cos(pivotAngle));
+            float pivotDeltaCanvasX = pivotTargetX - pivotCanvas.x;
+            float pivotDeltaCanvasZ = pivotTargetZ;
+
+            var verts = new System.Collections.Generic.List<UIVertex>();
+            vh.GetUIVertexStream(verts);
+            verts = SubdivideMeshByX(verts, localToCanvasScale);
+            bool hasBeforeBounds = false;
+            bool hasAfterBounds = false;
+            float beforeMinX = 0f, beforeMaxX = 0f, beforeMinZ = 0f, beforeMaxZ = 0f;
+            float afterMinX = 0f, afterMaxX = 0f, afterMinZ = 0f, afterMaxZ = 0f;
+            for (int i = 0; i < verts.Count; i++)
+            {
+                UIVertex v = verts[i];
+                Vector3 before = v.position;
+                if (!hasBeforeBounds)
+                {
+                    beforeMinX = beforeMaxX = before.x;
+                    beforeMinZ = beforeMaxZ = before.z;
+                    hasBeforeBounds = true;
+                }
+                else
+                {
+                    beforeMinX = Mathf.Min(beforeMinX, before.x);
+                    beforeMaxX = Mathf.Max(beforeMaxX, before.x);
+                    beforeMinZ = Mathf.Min(beforeMinZ, before.z);
+                    beforeMaxZ = Mathf.Max(beforeMaxZ, before.z);
+                }
+
+                float virtualX = pivotCanvas.x + before.x * localToCanvasScale;
+                float angle = virtualX / radiusPixels;
+                float targetX = radiusPixels * Mathf.Sin(angle);
+                float targetZ = -radiusPixels * (1f - Mathf.Cos(angle));
+                float deltaCanvasX = targetX - virtualX - pivotDeltaCanvasX;
+                float deltaCanvasZ = targetZ - pivotDeltaCanvasZ;
+                v.position = before + new Vector3(deltaCanvasX / localToCanvasScale, 0f, deltaCanvasZ / localToCanvasScale);
+
+                Vector3 after = v.position;
+                if (!hasAfterBounds)
+                {
+                    afterMinX = afterMaxX = after.x;
+                    afterMinZ = afterMaxZ = after.z;
+                    hasAfterBounds = true;
+                }
+                else
+                {
+                    afterMinX = Mathf.Min(afterMinX, after.x);
+                    afterMaxX = Mathf.Max(afterMaxX, after.x);
+                    afterMinZ = Mathf.Min(afterMinZ, after.z);
+                    afterMaxZ = Mathf.Max(afterMaxZ, after.z);
+                }
+                verts[i] = v;
+            }
+            vh.Clear();
+            vh.AddUIVertexTriangleStream(verts);
+
+            LogDebugSample(verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+                afterMinX, afterMaxX, afterMinZ, afterMaxZ);
+        }
+
+        private float GetLocalToCanvasScale()
+        {
+            float scale = 1f;
+            Transform current = graphic.transform;
+            Transform canvasTransform = targetCanvas.transform;
+            while (current != null && current != canvasTransform)
+            {
+                scale *= current.localScale.x;
+                current = current.parent;
+            }
+            return scale;
+        }
+
+        private System.Collections.Generic.List<UIVertex> SubdivideMeshByX(System.Collections.Generic.List<UIVertex> source, float localToCanvasScale)
+        {
+            lastInputVertexCount = source != null ? source.Count : 0;
+            lastSubdivideSegments = 1;
+
+            if (source == null || source.Count < 3 || source.Count % 3 != 0 || Mathf.Approximately(localToCanvasScale, 0f))
+                return source;
+
+            GetXBounds(source, out float minX, out float maxX);
+            float width = maxX - minX;
+            float canvasWidth = Mathf.Abs(width * localToCanvasScale);
+            int segments = Mathf.Clamp(Mathf.CeilToInt(canvasWidth / GraphicCurveSegmentWidth), 1, MaxGraphicCurveSegments);
+            if (segments <= 1)
+                return source;
+
+            lastSubdivideSegments = segments;
+            var result = new System.Collections.Generic.List<UIVertex>(source.Count * segments);
+            float step = width / segments;
+
+            for (int i = 0; i < source.Count; i += 3)
+            {
+                var triangle = new System.Collections.Generic.List<UIVertex>(3)
+                {
+                    source[i],
+                    source[i + 1],
+                    source[i + 2]
+                };
+
+                for (int s = 0; s < segments; s++)
+                {
+                    float stripMin = minX + step * s;
+                    float stripMax = s == segments - 1 ? maxX : stripMin + step;
+                    var clipped = ClipPolygonByX(triangle, stripMin, true);
+                    clipped = ClipPolygonByX(clipped, stripMax, false);
+                    AddTriangulatedPolygon(result, clipped);
+                }
+            }
+
+            return result.Count > 0 ? result : source;
+        }
+
+        private void GetXBounds(System.Collections.Generic.List<UIVertex> verts, out float minX, out float maxX)
+        {
+            minX = maxX = verts[0].position.x;
+            for (int i = 1; i < verts.Count; i++)
+            {
+                float x = verts[i].position.x;
+                minX = Mathf.Min(minX, x);
+                maxX = Mathf.Max(maxX, x);
+            }
+        }
+
+        private System.Collections.Generic.List<UIVertex> ClipPolygonByX(System.Collections.Generic.List<UIVertex> polygon, float clipX, bool keepGreater)
+        {
+            var output = new System.Collections.Generic.List<UIVertex>();
+            if (polygon == null || polygon.Count == 0)
+                return output;
+
+            UIVertex previous = polygon[polygon.Count - 1];
+            bool previousInside = IsInsideX(previous, clipX, keepGreater);
+            for (int i = 0; i < polygon.Count; i++)
+            {
+                UIVertex current = polygon[i];
+                bool currentInside = IsInsideX(current, clipX, keepGreater);
+                if (currentInside != previousInside)
+                {
+                    output.Add(IntersectAtX(previous, current, clipX));
+                }
+                if (currentInside)
+                    output.Add(current);
+                previous = current;
+                previousInside = currentInside;
+            }
+
+            return output;
+        }
+
+        private bool IsInsideX(UIVertex v, float clipX, bool keepGreater)
+        {
+            return keepGreater ? v.position.x >= clipX : v.position.x <= clipX;
+        }
+
+        private UIVertex IntersectAtX(UIVertex a, UIVertex b, float x)
+        {
+            float dx = b.position.x - a.position.x;
+            float t = Mathf.Approximately(dx, 0f) ? 0f : Mathf.Clamp01((x - a.position.x) / dx);
+            UIVertex v = LerpVertex(a, b, t);
+            v.position.x = x;
+            return v;
+        }
+
+        private void AddTriangulatedPolygon(System.Collections.Generic.List<UIVertex> result, System.Collections.Generic.List<UIVertex> polygon)
+        {
+            if (polygon == null || polygon.Count < 3)
+                return;
+
+            UIVertex first = polygon[0];
+            for (int i = 1; i < polygon.Count - 1; i++)
+            {
+                result.Add(first);
+                result.Add(polygon[i]);
+                result.Add(polygon[i + 1]);
+            }
+        }
+
+        private UIVertex LerpVertex(UIVertex a, UIVertex b, float t)
+        {
+            UIVertex v = a;
+            v.position = Vector3.Lerp(a.position, b.position, t);
+            v.normal = Vector3.Lerp(a.normal, b.normal, t);
+            v.tangent = Vector4.Lerp(a.tangent, b.tangent, t);
+            v.color = Color32.Lerp(a.color, b.color, t);
+            v.uv0 = Vector4.Lerp(a.uv0, b.uv0, t);
+            v.uv1 = Vector4.Lerp(a.uv1, b.uv1, t);
+            v.uv2 = Vector4.Lerp(a.uv2, b.uv2, t);
+            v.uv3 = Vector4.Lerp(a.uv3, b.uv3, t);
+            return v;
+        }
+
+        private void LogDebugSample(int vertexCount,
+            float beforeMinX, float beforeMaxX, float beforeMinZ, float beforeMaxZ,
+            float afterMinX, float afterMaxX, float afterMinZ, float afterMaxZ)
+        {
+            if (debugLogCount >= MaxGraphicDebugLogs || vertexCount <= 0 || targetCanvas == null) return;
+            bool interestingPath =
+                HudCurveDebug.IsStatusIconPath(graphic.transform, targetCanvas.transform) ||
+                HudCurveDebug.IsUnderNamedParent(graphic.transform, targetCanvas.transform, "PinnedRecipes") ||
+                HudCurveDebug.IsUnderNamedParent(graphic.transform, targetCanvas.transform, "TalkingHead") ||
+                HudCurveDebug.IsUnderNamedParent(graphic.transform, targetCanvas.transform, "SubtitleCanvas") ||
+                lastSubdivideSegments > 1;
+            if (!interestingPath) return;
+            debugLogCount++;
+
+            Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(graphic.transform.position);
+            string parentName = graphic.transform.parent != null ? graphic.transform.parent.name : "<none>";
+            float facingDot = Vector3.Dot(graphic.transform.forward, targetCanvas.transform.forward);
+            Mod.logger.LogInfo(
+                $"[VRHud/Graphic] #{debugLogCount} type='{graphic.GetType().Name}' name='{graphic.name}' parent='{parentName}' " +
+                $"radius={radiusPixels:F2} pivot=({pivotCanvas.x:F2},{pivotCanvas.y:F2},{pivotCanvas.z:F2}) " +
+                $"euler=({graphic.transform.localEulerAngles.x:F1},{graphic.transform.localEulerAngles.y:F1},{graphic.transform.localEulerAngles.z:F1}) " +
+                $"dot={facingDot:F3} verts={lastInputVertexCount}->{vertexCount} segments={lastSubdivideSegments} mode=vertex " +
+                $"beforeX=({beforeMinX:F2},{beforeMaxX:F2}) beforeZ=({beforeMinZ:F2},{beforeMaxZ:F2}) " +
+                $"afterX=({afterMinX:F2},{afterMaxX:F2}) afterZ=({afterMinZ:F2},{afterMaxZ:F2})");
+
+            if (!debugPathLogged)
+            {
+                debugPathLogged = true;
+                Mod.logger.LogInfo(
+                    $"[VRHud/CurveNode] kind=Graphic path='{HudCurveDebug.BuildPath(graphic.transform, targetCanvas.transform)}' " +
+                    $"chain='{HudCurveDebug.BuildChainSnapshot(graphic.transform, targetCanvas.transform)}'");
+            }
+        }
+    }
+
+    // Applies cylindrical curve distortion to TextMeshProUGUI vertices.
+    // TMP bypasses BaseMeshEffect/IMeshModifier, so we hook TMPro_EventManager.TEXT_CHANGED_EVENT instead.
+    // "Virtual Canvas X" approach: decouples curve calculation from 3D rotation.
+    //   - virtualX = pivotCanvas.x + vertex.x * scale  (as if TMP were unrotated)
+    //   - Deltas applied in local space; 3D rotation (flip) is handled by rendering of pre-curved vertices.
+    public class TmpHudCurveEffect : MonoBehaviour
+    {
+        public Canvas targetCanvas;
+        public float radiusPixels = 0f;
+        private TMPro.TextMeshProUGUI tmp;
+        private bool applying = false;
+        private float lastPivotCanvasX = float.NaN;
+        private int debugLogCount = 0;
+        private const int MaxDebugLogs = 16;
+        private Vector3[][] sourceVertices = null;
+        private bool debugPathLogged = false;
+
+        void Awake() => tmp = GetComponent<TMPro.TextMeshProUGUI>();
+
+        void OnEnable()
+        {
+            Canvas.willRenderCanvases += OnWillRenderCanvases;
+            TMPro.TMPro_EventManager.TEXT_CHANGED_EVENT.Add(OnTextChanged);
+            ForceApply("enable");
+        }
+
+        void OnDisable()
+        {
+            Canvas.willRenderCanvases -= OnWillRenderCanvases;
+            TMPro.TMPro_EventManager.TEXT_CHANGED_EVENT.Remove(OnTextChanged);
+        }
+
+        private void OnWillRenderCanvases()
+        {
+            if (radiusPixels <= 0f || targetCanvas == null || tmp == null) return;
+            // Only trigger on pivot canvas-x change — ignore pure rotation (flip animations)
+            float pivotX = targetCanvas.transform.InverseTransformPoint(tmp.transform.position).x;
+            if (!Mathf.Approximately(pivotX, lastPivotCanvasX))
+            {
+                lastPivotCanvasX = pivotX;
+                ForceApply("pivotChanged");
+            }
+        }
+
+        private void OnTextChanged(UnityEngine.Object obj)
+        {
+            // Guard: ForceMeshUpdate() inside ForceApply triggers this event; skip to avoid double-apply
+            if (obj == tmp && !applying) ForceApply("textChanged");
+        }
+
+        public void ForceApply(string reason = "force")
+        {
+            if (tmp == null) return;
+            // Update lastPivotCanvasX before ForceMeshUpdate to prevent OnWillRenderCanvases re-triggering
+            if (targetCanvas != null)
+                lastPivotCanvasX = targetCanvas.transform.InverseTransformPoint(tmp.transform.position).x;
+            applying = true;
+            tmp.ForceMeshUpdate();
+            applying = false;
+            CaptureSourceVertices();
+            ApplyToMesh(reason);
+        }
+
+        private void ApplyToMesh(string reason)
+        {
+            if (!enabled || radiusPixels <= 0f || targetCanvas == null || tmp == null) return;
+
+            // Pivot in canvas space (position only — unaffected by local rotation of TMP)
+            Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(tmp.transform.position);
+            // Local-to-canvas scale ratio (scale only, rotation ignored)
+            float localToCanvasScale = GetLocalToCanvasScale();
+            if (Mathf.Approximately(localToCanvasScale, 0f)) return;
+            bool useRelativeCurve = IsAnimationSensitiveText();
+            float pivotDeltaCanvasX = 0f;
+            float pivotDeltaCanvasZ = 0f;
+            if (useRelativeCurve)
+            {
+                float pivotAngle = pivotCanvas.x / radiusPixels;
+                float pivotTargetX = radiusPixels * Mathf.Sin(pivotAngle);
+                float pivotTargetZ = -radiusPixels * (1f - Mathf.Cos(pivotAngle));
+                pivotDeltaCanvasX = pivotTargetX - pivotCanvas.x;
+                pivotDeltaCanvasZ = pivotTargetZ;
+            }
+
+            var textInfo = tmp.textInfo;
+            EnsureSourceVertices();
+            bool changed = false;
+            int totalVertexCount = 0;
+            bool hasBeforeBounds = false;
+            bool hasAfterBounds = false;
+            float beforeMinX = 0f, beforeMaxX = 0f, beforeMinZ = 0f, beforeMaxZ = 0f;
+            float afterMinX = 0f, afterMaxX = 0f, afterMinZ = 0f, afterMaxZ = 0f;
+            for (int m = 0; m < textInfo.meshInfo.Length; m++)
+            {
+                var verts = textInfo.meshInfo[m].vertices;
+                if (verts == null) continue;
+                int count = textInfo.meshInfo[m].vertexCount;
+                if (sourceVertices == null || m >= sourceVertices.Length ||
+                    sourceVertices[m] == null || sourceVertices[m].Length < count)
+                {
+                    CaptureSourceVertices();
+                    if (sourceVertices == null || m >= sourceVertices.Length ||
+                        sourceVertices[m] == null || sourceVertices[m].Length < count)
+                    {
+                        continue;
+                    }
+                }
+                totalVertexCount += count;
+                for (int v = 0; v < count; v++)
+                {
+                    Vector3 before = sourceVertices[m][v];
+                    if (!hasBeforeBounds)
+                    {
+                        beforeMinX = beforeMaxX = before.x;
+                        beforeMinZ = beforeMaxZ = before.z;
+                        hasBeforeBounds = true;
+                    }
+                    else
+                    {
+                        beforeMinX = Mathf.Min(beforeMinX, before.x);
+                        beforeMaxX = Mathf.Max(beforeMaxX, before.x);
+                        beforeMinZ = Mathf.Min(beforeMinZ, before.z);
+                        beforeMaxZ = Mathf.Max(beforeMaxZ, before.z);
+                    }
+
+                    // Virtual canvas x = pivot + vertex local x (scaled), as if TMP were unrotated
+                    float virtualX = pivotCanvas.x + before.x * localToCanvasScale;
+                    float angle = virtualX / radiusPixels;
+                    float targetX = radiusPixels * Mathf.Sin(angle);
+                    float targetZ = -radiusPixels * (1f - Mathf.Cos(angle));
+
+                    // Canvas-space deltas -> local-space deltas (divide by stable scale).
+                    float deltaCanvasX = targetX - virtualX;
+                    float deltaCanvasZ = targetZ;  // straight z is 0
+
+                    if (useRelativeCurve)
+                    {
+                        // Keep the animated object's local pivot stable. Only preserve the
+                        // character-relative bend, so flip/swap animations do not orbit around
+                        // the cylinder depth offset.
+                        deltaCanvasX -= pivotDeltaCanvasX;
+                        deltaCanvasZ -= pivotDeltaCanvasZ;
+                    }
+
+                    verts[v] = before + new Vector3(deltaCanvasX / localToCanvasScale, 0f, deltaCanvasZ / localToCanvasScale);
+
+                    Vector3 after = verts[v];
+                    if (!hasAfterBounds)
+                    {
+                        afterMinX = afterMaxX = after.x;
+                        afterMinZ = afterMaxZ = after.z;
+                        hasAfterBounds = true;
+                    }
+                    else
+                    {
+                        afterMinX = Mathf.Min(afterMinX, after.x);
+                        afterMaxX = Mathf.Max(afterMaxX, after.x);
+                        afterMinZ = Mathf.Min(afterMinZ, after.z);
+                        afterMaxZ = Mathf.Max(afterMaxZ, after.z);
+                    }
+                }
+                changed = true;
+            }
+            if (changed) tmp.UpdateVertexData(TMPro.TMP_VertexDataUpdateFlags.Vertices);
+            LogDebugSample(reason, pivotCanvas, localToCanvasScale, totalVertexCount,
+                beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+                afterMinX, afterMaxX, afterMinZ, afterMaxZ);
+        }
+
+        private void LogDebugSample(string reason, Vector3 pivotCanvas, float localToCanvasScale, int vertexCount,
+            float beforeMinX, float beforeMaxX, float beforeMinZ, float beforeMaxZ,
+            float afterMinX, float afterMaxX, float afterMinZ, float afterMaxZ)
+        {
+            if (debugLogCount >= MaxDebugLogs || vertexCount <= 0) return;
+            debugLogCount++;
+
+            string parentName = tmp.transform.parent != null ? tmp.transform.parent.name : "<none>";
+            string text = tmp.text ?? "";
+            text = text.Replace("\r", " ").Replace("\n", " ");
+            if (text.Length > 32) text = text.Substring(0, 32);
+
+            float facingDot = Vector3.Dot(tmp.transform.forward, targetCanvas.transform.forward);
+            Mod.logger.LogInfo(
+                $"[VRHud/TMP] #{debugLogCount} reason={reason} name='{tmp.name}' parent='{parentName}' text='{text}' " +
+                $"radius={radiusPixels:F2} pivot=({pivotCanvas.x:F2},{pivotCanvas.y:F2},{pivotCanvas.z:F2}) " +
+                $"scale={localToCanvasScale:F4} euler=({tmp.transform.localEulerAngles.x:F1},{tmp.transform.localEulerAngles.y:F1},{tmp.transform.localEulerAngles.z:F1}) " +
+                $"dot={facingDot:F3} verts={vertexCount} " +
+                $"mode={(IsAnimationSensitiveText() ? "relative" : "vertex")} " +
+                $"beforeX=({beforeMinX:F2},{beforeMaxX:F2}) beforeZ=({beforeMinZ:F2},{beforeMaxZ:F2}) " +
+                $"afterX=({afterMinX:F2},{afterMaxX:F2}) afterZ=({afterMinZ:F2},{afterMaxZ:F2})");
+
+            if (!debugPathLogged && targetCanvas != null && HudCurveDebug.IsStatusIconPath(tmp.transform, targetCanvas.transform))
+            {
+                debugPathLogged = true;
+                Mod.logger.LogInfo(
+                    $"[VRHud/CurveNode] kind=TMP path='{HudCurveDebug.BuildPath(tmp.transform, targetCanvas.transform)}' " +
+                    $"chain='{HudCurveDebug.BuildChainSnapshot(tmp.transform, targetCanvas.transform)}'");
+            }
+        }
+
+        private void EnsureSourceVertices()
+        {
+            var textInfo = tmp.textInfo;
+            if (sourceVertices == null || sourceVertices.Length != textInfo.meshInfo.Length)
+                CaptureSourceVertices();
+        }
+
+        private void CaptureSourceVertices()
+        {
+            if (tmp == null) return;
+            var textInfo = tmp.textInfo;
+            sourceVertices = new Vector3[textInfo.meshInfo.Length][];
+            for (int m = 0; m < textInfo.meshInfo.Length; m++)
+            {
+                var verts = textInfo.meshInfo[m].vertices;
+                int count = textInfo.meshInfo[m].vertexCount;
+                if (verts == null || count <= 0) continue;
+                sourceVertices[m] = new Vector3[count];
+                System.Array.Copy(verts, sourceVertices[m], count);
+            }
+        }
+
+        private float GetLocalToCanvasScale()
+        {
+            float scale = 1f;
+            Transform current = tmp.transform;
+            Transform canvasTransform = targetCanvas.transform;
+            while (current != null && current != canvasTransform)
+            {
+                scale *= current.localScale.x;
+                current = current.parent;
+            }
+            return scale;
+        }
+
+        private bool IsAnimationSensitiveText()
+        {
+            return HudCurveDebug.IsAnimationSensitivePath(tmp.transform, targetCanvas != null ? targetCanvas.transform : null);
         }
     }
 
@@ -634,9 +1694,14 @@ namespace SubmersedVR
             XRSettingsEnabled.isEnabled = false;
             return true;
         }
-        public static void Postfix()
+        public static void Postfix(uGUI_CanvasScaler __instance)
         {
             XRSettingsEnabled.isEnabled = true;
+            // Re-apply our custom scale to prevent the game's HUD size slider from hiding the UI
+            if (VRHud.screenCanvas != null && __instance.transform == VRHud.screenCanvas)
+            {
+                VRHud.screenCanvas.localScale = new Vector3(0.00072f, 0.00072f, 0.00072f);
+            }
         }
     }
 
@@ -653,6 +1718,66 @@ namespace SubmersedVR
             XRSettingsEnabled.isEnabled = true;
         }
     }
+
+    [HarmonyPatch(typeof(HandReticle), nameof(HandReticle.LateUpdate))]
+    static class HandReticle_IconCanvas_Scale_Fixer
+    {
+        private static int logCount = 0;
+        private const int MaxLogs = 24;
+
+        public static void Postfix(HandReticle __instance)
+        {
+            if (__instance == null || __instance.iconCanvas == null) return;
+
+            Vector3 scale = __instance.iconCanvas.localScale;
+            float uniform = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y));
+            if (uniform <= 0.000001f) uniform = 1f;
+            Vector3 fixedScale = new Vector3(uniform, uniform, 1f);
+            bool changed = (scale - fixedScale).sqrMagnitude > 0.000001f;
+            if (changed)
+                __instance.iconCanvas.localScale = fixedScale;
+
+            if (logCount < MaxLogs && (changed || logCount < 4))
+            {
+                logCount++;
+                string handText = __instance.textHand ?? string.Empty;
+                string useText = __instance.textUse ?? string.Empty;
+                Mod.logger.LogInfo(
+                    $"[VRHud/HandReticle] #{logCount} iconCanvas scale=({scale.x:F4},{scale.y:F4},{scale.z:F4})->({fixedScale.x:F4},{fixedScale.y:F4},{fixedScale.z:F4}) " +
+                    $"icon={__instance.desiredIconType} handText='{handText}' useText='{useText}' targetDistance={__instance.targetDistance:F3}");
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(uGUI_ScannerIcon), nameof(uGUI_ScannerIcon.LateUpdate))]
+    static class ScannerIcon_UniformScale_Fixer
+    {
+        private static int logCount = 0;
+        private const int MaxLogs = 24;
+
+        public static void Postfix(uGUI_ScannerIcon __instance)
+        {
+            if (__instance == null || __instance.icon == null) return;
+
+            RectTransform rt = __instance.icon.rectTransform;
+            Vector3 scale = rt.localScale;
+            float uniform = Mathf.Max(Mathf.Abs(scale.x), Mathf.Abs(scale.y));
+            if (uniform <= 0.000001f) uniform = 1f;
+            Vector3 fixedScale = new Vector3(uniform, uniform, 1f);
+            bool changed = (scale - fixedScale).sqrMagnitude > 0.000001f;
+            if (changed)
+                rt.localScale = fixedScale;
+
+            if (logCount < MaxLogs && (changed || __instance.show))
+            {
+                logCount++;
+                Mod.logger.LogInfo(
+                    $"[VRHud/ScannerIcon] #{logCount} show={__instance.show} scale=({scale.x:F4},{scale.y:F4},{scale.z:F4})->({fixedScale.x:F4},{fixedScale.y:F4},{fixedScale.z:F4}) " +
+                    $"seqT={__instance.sequence.t:F3} active={__instance.sequence.active}");
+            }
+        }
+    }
+
 /*
     [HarmonyPatch(typeof(PlayerMask))]
     [HarmonyPatch("Start")]

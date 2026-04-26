@@ -111,7 +111,7 @@ namespace SubmersedVR
     {
         public static bool Prefix(PlayerCinematicController __instance, Player setplayer)
         {
-            VRUtil.Recenter();
+            if (Settings.AutoRecenterOnVehicleEnter) VRUtil.Recenter();
             if (__instance.debug)
             {
                 Debug.Log(__instance.gameObject.name + ".StartCinematicMode");

@@ -82,6 +82,48 @@ namespace SubmersedVR
         // public static event FloatChanged HudDistanceChanged;
         public static float PlayerScale = 1.0f;
 
+        // 도보 HUD 설정
+        public static float HudVerticalOffset = 0.0f;
+        public static event FloatChanged HudVerticalOffsetChanged;
+        public static float HudScale = 1.0f;
+        public static event FloatChanged HudScaleChanged;
+        public static float HudDistance = 0.0f;
+        public static event FloatChanged HudDistanceChanged;
+
+        // 탑승물 HUD 설정
+        public static float VehicleHudVerticalOffset = 0.0f;
+        public static event FloatChanged VehicleHudVerticalOffsetChanged;
+        public static float VehicleHudScale = 1.0f;
+        public static event FloatChanged VehicleHudScaleChanged;
+        public static float VehicleHudDistance = 0.0f;
+        public static event FloatChanged VehicleHudDistanceChanged;
+
+        // 도보 HUD 추가 옵션
+        public static bool HudFollowHead = false;
+        public static event BooleanChanged HudFollowHeadChanged;
+        public static bool HudCurved = false;
+        public static event BooleanChanged HudCurvedChanged;
+        public static float HudCurveRadius = 2.0f;
+        public static event FloatChanged HudCurveRadiusChanged;
+
+        // 탑승물 HUD 커브 옵션
+        public static bool VehicleHudCurved = false;
+        public static event BooleanChanged VehicleHudCurvedChanged;
+        public static float VehicleHudCurveRadius = 2.0f;
+        public static event FloatChanged VehicleHudCurveRadiusChanged;
+
+        // 자막 설정
+        public static bool SubtitleSyncWithHud = true;
+        public static event BooleanChanged SubtitleSyncWithHudChanged;
+        public static float SubtitleVerticalOffset = -0.15f;
+        public static event FloatChanged SubtitleVerticalOffsetChanged;
+        public static float SubtitleScale = 1.0f;
+        public static event FloatChanged SubtitleScaleChanged;
+        public static float SubtitleDistance = 0.0f;
+        public static event FloatChanged SubtitleDistanceChanged;
+
+        public static bool AutoRecenterOnVehicleEnter = false;
+
         public static bool EnableGameHaptics = true;
         public static bool EnableUIHaptics = true;
 
@@ -268,6 +310,48 @@ namespace SubmersedVR
             panel.AddChoiceOption<string>(tab, "Show Laser Pointer", new string[] {"Always", "Default", "Never"}, ShowLaserPointer , (value) => {
                 ShowLaserPointer = value;
             });
+            panel.AddSliderOption(tab, "HUD Vertical Offset", HudVerticalOffset, -0.3f, 0.3f, HudVerticalOffset, 0.01f, (value) => {
+                HudVerticalOffset = value;
+                HudVerticalOffsetChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Moves the in-game HUD up/down relative to your VR headset.");
+            panel.AddSliderOption(tab, "HUD Scale", HudScale, 0.5f, 2.0f, HudScale, 0.05f, (value) => {
+                HudScale = value;
+                HudScaleChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Adjusts the size of the in-game HUD.");
+            panel.AddSliderOption(tab, "HUD Distance", HudDistance, -0.5f, 1.0f, HudDistance, 0.05f, (value) => {
+                HudDistance = value;
+                HudDistanceChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Moves the in-game HUD closer or farther away.");
+            panel.AddChoiceOption<string>(tab, "HUD Follow Mode", new string[] { "Body-Locked", "Head-Locked" }, HudFollowHead ? "Head-Locked" : "Body-Locked", (value) => {
+                HudFollowHead = value == "Head-Locked";
+                HudFollowHeadChanged?.Invoke(HudFollowHead);
+            });
+            panel.AddChoiceOption<string>(tab, "HUD Display", new string[] { "Flat", "Curved" }, HudCurved ? "Curved" : "Flat", (value) => {
+                HudCurved = value == "Curved";
+                HudCurvedChanged?.Invoke(HudCurved);
+            });
+            panel.AddSliderOption(tab, "HUD Curve Radius", HudCurveRadius, 0.5f, 5.0f, HudCurveRadius, 0.1f, (value) => {
+                HudCurveRadius = value;
+                HudCurveRadiusChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.0", "Curve radius in meters. Smaller = more curved.");
+
+            panel.AddHeading(tab, "Subtitle");
+            panel.AddToggleOption(tab, "Sync Subtitle with Foot HUD", SubtitleSyncWithHud, (value) => {
+                SubtitleSyncWithHud = value;
+                SubtitleSyncWithHudChanged?.Invoke(value);
+            }, "Links subtitle canvas position and scale to the on-foot HUD settings.");
+            panel.AddSliderOption(tab, "Subtitle Vertical Offset", SubtitleVerticalOffset, -0.5f, 0.3f, SubtitleVerticalOffset, 0.01f, (value) => {
+                SubtitleVerticalOffset = value;
+                SubtitleVerticalOffsetChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Moves the subtitle up/down (only when not synced with HUD).");
+            panel.AddSliderOption(tab, "Subtitle Scale", SubtitleScale, 0.5f, 2.0f, SubtitleScale, 0.05f, (value) => {
+                SubtitleScale = value;
+                SubtitleScaleChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Subtitle canvas size (only when not synced with HUD).");
+            panel.AddSliderOption(tab, "Subtitle Distance", SubtitleDistance, -0.5f, 1.0f, SubtitleDistance, 0.05f, (value) => {
+                SubtitleDistance = value;
+                SubtitleDistanceChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Subtitle canvas depth offset (only when not synced with HUD).");
 
             panel.AddHeading(tab, "Experimental");
             panel.AddToggleOption(tab, "Full Body", FullBody, (value) => { FullBody = value; FullBodyChanged(value); }, "See the full body instead of just the hands and feet.");
@@ -286,7 +370,31 @@ namespace SubmersedVR
             //panel.AddToggleOption(tab, "Always show laserpointer", AlwaysShowLaserPointer, (value) => { AlwaysShowLaserPointer = value; AlwaysShowLaserPointerChanged(value); }, "Show the laserpointer at all times.");
 
             tab = panel.AddTab("Vehicles VR");
+            panel.AddHeading(tab, "Vehicle HUD");
+            panel.AddSliderOption(tab, "Vertical Offset", VehicleHudVerticalOffset, -0.3f, 0.3f, VehicleHudVerticalOffset, 0.01f, (value) => {
+                VehicleHudVerticalOffset = value;
+                VehicleHudVerticalOffsetChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Moves the vehicle HUD up/down relative to your VR headset.");
+            panel.AddSliderOption(tab, "Scale", VehicleHudScale, 0.5f, 2.0f, VehicleHudScale, 0.05f, (value) => {
+                VehicleHudScale = value;
+                VehicleHudScaleChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Adjusts the size of the vehicle HUD.");
+            panel.AddSliderOption(tab, "Distance", VehicleHudDistance, -0.5f, 1.0f, VehicleHudDistance, 0.05f, (value) => {
+                VehicleHudDistance = value;
+                VehicleHudDistanceChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.00", "Moves the vehicle HUD closer or farther away.");
+            panel.AddChoiceOption<string>(tab, "Display", new string[] { "Flat", "Curved" }, VehicleHudCurved ? "Curved" : "Flat", (value) => {
+                VehicleHudCurved = value == "Curved";
+                VehicleHudCurvedChanged?.Invoke(VehicleHudCurved);
+            });
+            panel.AddSliderOption(tab, "Curve Radius", VehicleHudCurveRadius, 0.5f, 5.0f, VehicleHudCurveRadius, 0.1f, (value) => {
+                VehicleHudCurveRadius = value;
+                VehicleHudCurveRadiusChanged?.Invoke(value);
+            }, SliderLabelMode.Float, "0.0", "Curve radius in meters. Smaller = more curved.");
             panel.AddHeading(tab, "Comfort");
+            panel.AddToggleOption(tab, "Auto-Recenter on Vehicle Enter", AutoRecenterOnVehicleEnter, (value) => {
+                AutoRecenterOnVehicleEnter = value;
+            }, "Automatically recenter VR tracking when entering a vehicle or cinematic.");
             panel.AddSliderOption(tab, "SeaTruck Pilot Position Offset", SeaTruckZOffset, -0.4f, 0.4f, SeaTruckZOffset, 0.01f, (value) => { SeaTruckZOffset = value; }, SliderLabelMode.Float, "0.00");
             panel.AddSliderOption(tab, "SeaTruck Pilot Height Offset", SeaTruckYOffset, -0.4f, 0.4f, SeaTruckYOffset, 0.01f, (value) => { SeaTruckYOffset = value; }, SliderLabelMode.Float, "0.00");
             panel.AddSliderOption(tab, "Prawn Suit Position Offset", ExosuitZOffset, -0.4f, 0.4f, ExosuitZOffset, 0.01f, (value) => { ExosuitZOffset = value; }, SliderLabelMode.Float, "0.00");
