@@ -89,6 +89,12 @@ namespace SubmersedVR
         public static event FloatChanged HudScaleChanged;
         public static float HudDistance = 0.0f;
         public static event FloatChanged HudDistanceChanged;
+        public static float PingProjectionScale = 1.85f;
+        public static float PingProjectionVerticalScale = 3.5f;
+        public static float PingHorizontalEdgeScale = 1.0f;
+        public static float PingVerticalEdgeScale = 1.0f;
+        public static float PingVerticalOffset = 0.0f;
+        public static bool PingDebugLogs = false;
 
         // 탑승물 HUD 설정
         public static float VehicleHudVerticalOffset = 0.0f;
@@ -217,37 +223,41 @@ namespace SubmersedVR
             int tab = panel.tabs.Count - 1;
 
             string space = "   ";
-            panel.AddHeading(tab, "Ambient Occlusion");
-            panel.AddToggleOption(tab, space + "Enable", AOEnabled, (value) => { AOEnabled = AmbientOcclusionVR.enabled = value; AmbientOcclusionSettingsChanged(); }, "Use ambient occlusion. Increases demand on GPU.");
-            panel.AddChoiceOption<string>(tab, space + "Method", new string[] {"Post Effect", "Deferred", "Debug"}, AOMethod, (value) => {
-                AOMethod = value;
+            string aoMethodDisplay = AOMethod == "Deferred" ? "지연 렌더링" : AOMethod == "Debug" ? "디버그" : "후처리";
+            string aoSampleDisplay = AOSampleCount == "Low" ? "낮음" : AOSampleCount == "High" ? "높음" : AOSampleCount == "Very High" ? "매우 높음" : "중간";
+            string aoNormalsDisplay = AOPerPixelNormals == "None" ? "없음" : AOPerPixelNormals;
+
+            panel.AddHeading(tab, "앰비언트 오클루전");
+            panel.AddToggleOption(tab, space + "사용", AOEnabled, (value) => { AOEnabled = AmbientOcclusionVR.enabled = value; AmbientOcclusionSettingsChanged(); }, "앰비언트 오클루전을 사용합니다. GPU 부하가 증가합니다.");
+            panel.AddChoiceOption<string>(tab, space + "방식", new string[] {"후처리", "지연 렌더링", "디버그"}, aoMethodDisplay, (value) => {
+                AOMethod = value == "지연 렌더링" ? "Deferred" : value == "디버그" ? "Debug" : "Post Effect";
                 if (AmbientOcclusionSettingsChanged != null) {
                     AmbientOcclusionSettingsChanged();
                 }
             });
-            panel.AddChoiceOption<string>(tab, space + "Sample Count", new string[] {"Low", "Medium", "High", "Very High"}, AOSampleCount, (value) => {
-                AOSampleCount = value;
+            panel.AddChoiceOption<string>(tab, space + "샘플 수", new string[] {"낮음", "중간", "높음", "매우 높음"}, aoSampleDisplay, (value) => {
+                AOSampleCount = value == "낮음" ? "Low" : value == "높음" ? "High" : value == "매우 높음" ? "Very High" : "Medium";
                 if (AmbientOcclusionSettingsChanged != null) {
                     AmbientOcclusionSettingsChanged();
                 }
             });
-            panel.AddChoiceOption<string>(tab, space + "Per Pixel Normals", new string[] {"None", "Camera", "GBuffer", "Octa"}, AOPerPixelNormals, (value) => {
-                AOPerPixelNormals = value;
+            panel.AddChoiceOption<string>(tab, space + "픽셀별 노멀", new string[] {"없음", "Camera", "GBuffer", "Octa"}, aoNormalsDisplay, (value) => {
+                AOPerPixelNormals = value == "없음" ? "None" : value;
                 if (AmbientOcclusionSettingsChanged != null) {
                     AmbientOcclusionSettingsChanged();
                 }
             });
-            panel.AddSliderOption(tab, space + "Intensity", AOIntensity, 0f, 1.0f, AOIntensity, 0.02f, (value) => { AOIntensity = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, space + "Radius", AORadius, 0f, 10.0f, AORadius, 0.1f, (value) => { AORadius = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.0");
-            panel.AddSliderOption(tab, space + "Power Exponent", AOPowerExponent, 0f, 16f, AOPowerExponent, 0.1f, (value) => { AOPowerExponent = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.0");
-            panel.AddSliderOption(tab, space + "Bias", AOBias, 0f, 0.99f, AOBias, 0.02f, (value) => { AOBias = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, space + "Thickness", AOThickness, 0f, 1.0f, AOThickness, 0.02f, (value) => { AOThickness = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
-            panel.AddToggleOption(tab, space + "Downsample", AODownSample, (value) => { AODownSample = value; AmbientOcclusionSettingsChanged(); }, "Compute the Occlusion and Blur at half of the resolution.");
-            panel.AddToggleOption(tab, space + "Cache Aware", AOCacheAware, (value) => { AOCacheAware = value; AmbientOcclusionSettingsChanged(); }, "Cache optimization for best performance / quality tradeoff.");
-            panel.AddToggleOption(tab, space + "Enable Temporal Filter", AOTemporalFilterEnabled, (value) => { AOTemporalFilterEnabled = AmbientOcclusionVR.FilterEnabled = value; AmbientOcclusionSettingsChanged(); }, "Accumulates the effect over the time.");
-            panel.AddToggleOption(tab, space + "Temporal Filter Downsample", AOTemporalFilterDownsampleEnabled, (value) => { AOTemporalFilterDownsampleEnabled = value; AmbientOcclusionSettingsChanged(); }, "Effect at half of the resolution.");
-            panel.AddSliderOption(tab, space + "Temporal Filter Blending", AOTemporalFilterBlending, 0f, 1.0f, AOTemporalFilterBlending, 0.02f, (value) => { AOTemporalFilterBlending = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, space + "Temporal Filter Response", AOTemporalFilterResponse, 0f, 1.0f, AOTemporalFilterResponse, 0.02f, (value) => { AOTemporalFilterResponse = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, space + "강도", AOIntensity, 0f, 1.0f, AOIntensity, 0.02f, (value) => { AOIntensity = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, space + "반경", AORadius, 0f, 10.0f, AORadius, 0.1f, (value) => { AORadius = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.0");
+            panel.AddSliderOption(tab, space + "파워 지수", AOPowerExponent, 0f, 16f, AOPowerExponent, 0.1f, (value) => { AOPowerExponent = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.0");
+            panel.AddSliderOption(tab, space + "바이어스", AOBias, 0f, 0.99f, AOBias, 0.02f, (value) => { AOBias = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, space + "두께", AOThickness, 0f, 1.0f, AOThickness, 0.02f, (value) => { AOThickness = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
+            panel.AddToggleOption(tab, space + "다운샘플", AODownSample, (value) => { AODownSample = value; AmbientOcclusionSettingsChanged(); }, "오클루전과 블러를 절반 해상도로 계산합니다.");
+            panel.AddToggleOption(tab, space + "캐시 최적화", AOCacheAware, (value) => { AOCacheAware = value; AmbientOcclusionSettingsChanged(); }, "성능과 품질 균형을 위한 캐시 최적화입니다.");
+            panel.AddToggleOption(tab, space + "시간 필터 사용", AOTemporalFilterEnabled, (value) => { AOTemporalFilterEnabled = AmbientOcclusionVR.FilterEnabled = value; AmbientOcclusionSettingsChanged(); }, "시간에 따라 효과를 누적합니다.");
+            panel.AddToggleOption(tab, space + "시간 필터 다운샘플", AOTemporalFilterDownsampleEnabled, (value) => { AOTemporalFilterDownsampleEnabled = value; AmbientOcclusionSettingsChanged(); }, "시간 필터를 절반 해상도로 적용합니다.");
+            panel.AddSliderOption(tab, space + "시간 필터 블렌딩", AOTemporalFilterBlending, 0f, 1.0f, AOTemporalFilterBlending, 0.02f, (value) => { AOTemporalFilterBlending = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, space + "시간 필터 반응", AOTemporalFilterResponse, 0f, 1.0f, AOTemporalFilterResponse, 0.02f, (value) => { AOTemporalFilterResponse = value; AmbientOcclusionSettingsChanged(); }, SliderLabelMode.Float, "0.00");
 
 
         }
@@ -256,200 +266,213 @@ namespace SubmersedVR
         {
             int tab = panel.AddTab("Submersed VR");
 
-            panel.AddHeading(tab, "Controls");
-            panel.AddChoiceOption<string>(tab, "Movement Mode", new string[] {"Head Based", "Right Hand Based", "Left Hand Based"}, HandBasedTurning ? (LeftHandBasedTurning ? "Left Hand Based" : "Right Hand Based") : "Head Based", (value) => {
-                HandBasedTurning = value == "Right Hand Based" || value == "Left Hand Based";
-                LeftHandBasedTurning = value == "Left Hand Based";
+            string movementModeDisplay = HandBasedTurning ? (LeftHandBasedTurning ? "왼손 기준" : "오른손 기준") : "머리 기준";
+            string laserPointerDisplay = ShowLaserPointer == "Always" ? "항상" : ShowLaserPointer == "Never" ? "끄기" : "기본";
+
+            panel.AddHeading(tab, "조작");
+            panel.AddChoiceOption<string>(tab, "이동 기준", new string[] {"머리 기준", "오른손 기준", "왼손 기준"}, movementModeDisplay, (value) => {
+                HandBasedTurning = value == "오른손 기준" || value == "왼손 기준";
+                LeftHandBasedTurning = value == "왼손 기준";
             });
-            panel.AddToggleOption(tab, "Enable Player Snap Turning", IsSnapTurningEnabled, (value) => { IsSnapTurningEnabled = value;
+            panel.AddToggleOption(tab, "플레이어 스냅 회전 사용", IsSnapTurningEnabled, (value) => { IsSnapTurningEnabled = value;
                 if (IsSnapTurningEnabledChanged != null) {
                     IsSnapTurningEnabledChanged(value);
                 }
             });
-            panel.AddChoiceOption<float>(tab, "Player Snap Turning Angle(°)", new float[] {22.5f, 30f, 45f, 90f}, SnapTurningAngle, (value) => {
+            panel.AddChoiceOption<float>(tab, "플레이어 스냅 회전 각도(°)", new float[] {22.5f, 30f, 45f, 90f}, SnapTurningAngle, (value) => {
                 SnapTurningAngle = value;
                 if (SnapTurningAngleChanged != null) {
                     SnapTurningAngleChanged(value);
                 }
             });
-            panel.AddToggleOption(tab, "Enable Prawn Suit Snap Turning", IsExosuitSnapTurningEnabled, (value) => { IsExosuitSnapTurningEnabled = value;
+            panel.AddToggleOption(tab, "프론 슈트 스냅 회전 사용", IsExosuitSnapTurningEnabled, (value) => { IsExosuitSnapTurningEnabled = value;
                 if (IsExosuitSnapTurningEnabledChanged != null) {
                     IsExosuitSnapTurningEnabledChanged(value);
                 }
             });
-            panel.AddChoiceOption<float>(tab, "Prawn Suit Snap Turning Angle(°)", new float[] {22.5f, 30f, 45f, 90f}, ExosuitSnapTurningAngle, (value) => {
+            panel.AddChoiceOption<float>(tab, "프론 슈트 스냅 회전 각도(°)", new float[] {22.5f, 30f, 45f, 90f}, ExosuitSnapTurningAngle, (value) => {
                 ExosuitSnapTurningAngle = value;
                 if (ExosuitSnapTurningAngleChanged != null) {
                     ExosuitSnapTurningAngleChanged(value);
                 }
             });
-           panel.AddToggleOption(tab, "Enable Snowfox Snap Turning", IsSnowBikeSnapTurningEnabled, (value) => { IsSnowBikeSnapTurningEnabled = value;
+           panel.AddToggleOption(tab, "스노우폭스 스냅 회전 사용", IsSnowBikeSnapTurningEnabled, (value) => { IsSnowBikeSnapTurningEnabled = value;
                 if (IsSnowBikeSnapTurningEnabledChanged != null) {
                     IsSnowBikeSnapTurningEnabledChanged(value);
                 }
             });
-            panel.AddChoiceOption<float>(tab, "Snowfox Snap Turning Angle(°)", new float[] {22.5f, 30f, 45f, 90f}, SnowBikeSnapTurningAngle, (value) => {
+            panel.AddChoiceOption<float>(tab, "스노우폭스 스냅 회전 각도(°)", new float[] {22.5f, 30f, 45f, 90f}, SnowBikeSnapTurningAngle, (value) => {
                 SnowBikeSnapTurningAngle = value;
                 if (SnowBikeSnapTurningAngleChanged != null) {
                     SnowBikeSnapTurningAngleChanged(value);
                 }
             });
 
-            panel.AddSliderOption(tab, "Sprint Velocity Multiplier", ForwardSprintModifier, 2f, 3f, ForwardSprintModifier, 0.25f, (value) =>
+            panel.AddSliderOption(tab, "질주 속도 배율", ForwardSprintModifier, 2f, 3f, ForwardSprintModifier, 0.25f, (value) =>
             {
                 ForwardSprintModifier = value;
                 //If the player is currently in-game, immediately apply the new value to PlayerMotor to update sprint speed in real time
                 Sprint.OnForwardSprintModifierChanged();
             }, SliderLabelMode.Float, "0.00");
 
-            panel.AddHeading(tab, "Immersion");
-            panel.AddToggleOption(tab, "Articulated Hands", ArticulatedHands, (value) => { ArticulatedHands = value;  }, "Hands animate based on the movement of your physical hands.");
-            panel.AddToggleOption(tab, "Enable Game Haptics", EnableGameHaptics, (value) => { EnableGameHaptics = value; }, "Enable controller vibration while interacting with world objects.");
-            panel.AddToggleOption(tab, "Enable UI Haptics", EnableUIHaptics, (value) => { EnableUIHaptics = value; }, "Enable controller vibration while interacting with the User Interface.");
-            panel.AddToggleOption(tab, "Put survival meter on left wrist", PutBarsOnWrist, (value) => { PutBarsOnWrist = value; PutBarsOnWristChanged(value); });
-            panel.AddChoiceOption<string>(tab, "Show Laser Pointer", new string[] {"Always", "Default", "Never"}, ShowLaserPointer , (value) => {
-                ShowLaserPointer = value;
+            panel.AddHeading(tab, "몰입");
+            panel.AddToggleOption(tab, "손가락 애니메이션", ArticulatedHands, (value) => { ArticulatedHands = value;  }, "실제 손 움직임에 맞춰 게임 손 애니메이션을 재생합니다.");
+            panel.AddToggleOption(tab, "게임 햅틱 사용", EnableGameHaptics, (value) => { EnableGameHaptics = value; }, "월드 오브젝트와 상호작용할 때 컨트롤러 진동을 사용합니다.");
+            panel.AddToggleOption(tab, "UI 햅틱 사용", EnableUIHaptics, (value) => { EnableUIHaptics = value; }, "UI와 상호작용할 때 컨트롤러 진동을 사용합니다.");
+            panel.AddToggleOption(tab, "생존 상태를 왼손목에 표시", PutBarsOnWrist, (value) => { PutBarsOnWrist = value; PutBarsOnWristChanged(value); });
+            panel.AddChoiceOption<string>(tab, "레이저 포인터 표시", new string[] {"항상", "기본", "끄기"}, laserPointerDisplay, (value) => {
+                ShowLaserPointer = value == "항상" ? "Always" : value == "끄기" ? "Never" : "Default";
             });
-            panel.AddSliderOption(tab, "HUD Vertical Offset", HudVerticalOffset, -0.3f, 0.3f, HudVerticalOffset, 0.01f, (value) => {
+            panel.AddSliderOption(tab, "HUD 상하 위치", HudVerticalOffset, -0.3f, 0.3f, HudVerticalOffset, 0.01f, (value) => {
                 HudVerticalOffset = value;
                 HudVerticalOffsetChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Moves the in-game HUD up/down relative to your VR headset.");
-            panel.AddSliderOption(tab, "HUD Scale", HudScale, 0.5f, 2.0f, HudScale, 0.05f, (value) => {
+            }, SliderLabelMode.Float, "0.00", "게임 HUD를 VR 헤드셋 기준 위아래로 이동합니다.");
+            panel.AddSliderOption(tab, "HUD 크기", HudScale, 0.5f, 2.0f, HudScale, 0.05f, (value) => {
                 HudScale = value;
                 HudScaleChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Adjusts the size of the in-game HUD.");
-            panel.AddSliderOption(tab, "HUD Distance", HudDistance, -0.5f, 1.0f, HudDistance, 0.05f, (value) => {
+            }, SliderLabelMode.Float, "0.00", "게임 HUD의 크기를 조절합니다.");
+            panel.AddSliderOption(tab, "HUD 거리", HudDistance, -0.5f, 1.0f, HudDistance, 0.05f, (value) => {
                 HudDistance = value;
                 HudDistanceChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Moves the in-game HUD closer or farther away.");
-            panel.AddChoiceOption<string>(tab, "HUD Follow Mode", new string[] { "Body-Locked", "Head-Locked" }, HudFollowHead ? "Head-Locked" : "Body-Locked", (value) => {
-                HudFollowHead = value == "Head-Locked";
+            }, SliderLabelMode.Float, "0.00", "게임 HUD를 더 가깝게 또는 멀리 이동합니다.");
+            panel.AddSliderOption(tab, "핑 상하 위치 조정", PingVerticalOffset, -0.2f, 0.2f, PingVerticalOffset, 0.005f, (value) => {
+                PingVerticalOffset = value;
+            }, SliderLabelMode.Float, "0.000", "신호기/핑 전체 위치를 위아래로 미세 조정합니다. 움직임 배율에는 영향을 주지 않습니다.");
+            panel.AddSliderOption(tab, "핑 좌우 가장자리 범위", PingHorizontalEdgeScale, 0.5f, 2.0f, PingHorizontalEdgeScale, 0.05f, (value) => {
+                PingHorizontalEdgeScale = value;
+            }, SliderLabelMode.Float, "0.00", "신호기/핑이 좌우 가장자리에서 막히는 범위입니다. 너무 넓으면 내리고, 너무 빨리 막히면 올리세요.");
+            panel.AddSliderOption(tab, "핑 상하 가장자리 범위", PingVerticalEdgeScale, 0.5f, 2.5f, PingVerticalEdgeScale, 0.05f, (value) => {
+                PingVerticalEdgeScale = value;
+            }, SliderLabelMode.Float, "0.00", "신호기/핑이 상하 가장자리에서 막히는 범위입니다. 너무 빨리 막히면 올리세요.");
+            panel.AddChoiceOption<string>(tab, "HUD 고정 방식", new string[] { "몸 기준", "머리 기준" }, HudFollowHead ? "머리 기준" : "몸 기준", (value) => {
+                HudFollowHead = value == "머리 기준";
                 HudFollowHeadChanged?.Invoke(HudFollowHead);
             });
-            panel.AddChoiceOption<string>(tab, "HUD Display", new string[] { "Flat", "Curved" }, HudCurved ? "Curved" : "Flat", (value) => {
-                HudCurved = value == "Curved";
+            panel.AddChoiceOption<string>(tab, "HUD 표시 방식", new string[] { "평면", "커브드" }, HudCurved ? "커브드" : "평면", (value) => {
+                HudCurved = value == "커브드";
                 HudCurvedChanged?.Invoke(HudCurved);
             });
-            panel.AddSliderOption(tab, "HUD Curve Radius", HudCurveRadius, 0.5f, 5.0f, HudCurveRadius, 0.1f, (value) => {
+            panel.AddSliderOption(tab, "HUD 곡률 반경", HudCurveRadius, 0.5f, 5.0f, HudCurveRadius, 0.1f, (value) => {
                 HudCurveRadius = value;
                 HudCurveRadiusChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.0", "Curve radius in meters. Smaller = more curved.");
+            }, SliderLabelMode.Float, "0.0", "미터 단위 곡률 반경입니다. 값이 작을수록 더 많이 굽습니다.");
 
-            panel.AddHeading(tab, "Subtitle");
-            panel.AddToggleOption(tab, "Sync Subtitle with Foot HUD", SubtitleSyncWithHud, (value) => {
+            panel.AddHeading(tab, "자막");
+            panel.AddToggleOption(tab, "자막을 도보 HUD와 동기화", SubtitleSyncWithHud, (value) => {
                 SubtitleSyncWithHud = value;
                 SubtitleSyncWithHudChanged?.Invoke(value);
-            }, "Links subtitle canvas position and scale to the on-foot HUD settings.");
-            panel.AddSliderOption(tab, "Subtitle Vertical Offset", SubtitleVerticalOffset, -0.5f, 0.3f, SubtitleVerticalOffset, 0.01f, (value) => {
+            }, "자막 캔버스 위치와 크기를 도보 HUD 설정과 연결합니다.");
+            panel.AddSliderOption(tab, "자막 상하 위치", SubtitleVerticalOffset, -0.5f, 0.3f, SubtitleVerticalOffset, 0.01f, (value) => {
                 SubtitleVerticalOffset = value;
                 SubtitleVerticalOffsetChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Moves the subtitle up/down (only when not synced with HUD).");
-            panel.AddSliderOption(tab, "Subtitle Scale", SubtitleScale, 0.5f, 2.0f, SubtitleScale, 0.05f, (value) => {
+            }, SliderLabelMode.Float, "0.00", "도보 HUD와 동기화하지 않을 때 자막을 위아래로 이동합니다.");
+            panel.AddSliderOption(tab, "자막 크기", SubtitleScale, 0.5f, 2.0f, SubtitleScale, 0.05f, (value) => {
                 SubtitleScale = value;
                 SubtitleScaleChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Subtitle canvas size (only when not synced with HUD).");
-            panel.AddSliderOption(tab, "Subtitle Distance", SubtitleDistance, -0.5f, 1.0f, SubtitleDistance, 0.05f, (value) => {
+            }, SliderLabelMode.Float, "0.00", "도보 HUD와 동기화하지 않을 때 자막 캔버스 크기를 조절합니다.");
+            panel.AddSliderOption(tab, "자막 거리", SubtitleDistance, -0.5f, 1.0f, SubtitleDistance, 0.05f, (value) => {
                 SubtitleDistance = value;
                 SubtitleDistanceChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Subtitle canvas depth offset (only when not synced with HUD).");
+            }, SliderLabelMode.Float, "0.00", "도보 HUD와 동기화하지 않을 때 자막 캔버스 깊이를 조절합니다.");
 
-            panel.AddHeading(tab, "Experimental");
-            panel.AddToggleOption(tab, "Full Body", FullBody, (value) => { FullBody = value; FullBodyChanged(value); }, "See the full body instead of just the hands and feet.");
-            panel.AddSliderOption(tab, "Body Scale", PlayerScale, 0.8f, 1.2f, PlayerScale, 0.01f, (value) => { PlayerScale = value; }, SliderLabelMode.Float, "0.00");
-            panel.AddToggleOption(tab, "Put hand reticle on laserpointer end", PutHandReticleOnLaserPointer, (value) => { PutHandReticleOnLaserPointer = value; PutHandReticleOnLaserPointerChanged(value); });
-            panel.AddToggleOption(tab, "Invert Y Axis in Seamoth/Cameras", InvertYAxis, (value) => { InvertYAxis = value; InvertYAxisChanged(value); }, "Enables Y axis inversion for Seamoth and Cameras.");
+            panel.AddHeading(tab, "실험 기능");
+            panel.AddToggleOption(tab, "전신 표시", FullBody, (value) => { FullBody = value; FullBodyChanged(value); }, "손과 발만 보지 않고 전신을 표시합니다.");
+            panel.AddSliderOption(tab, "몸 크기", PlayerScale, 0.8f, 1.2f, PlayerScale, 0.01f, (value) => { PlayerScale = value; }, SliderLabelMode.Float, "0.00");
+            panel.AddToggleOption(tab, "손 아이콘을 레이저 끝에 표시", PutHandReticleOnLaserPointer, (value) => { PutHandReticleOnLaserPointer = value; PutHandReticleOnLaserPointerChanged(value); });
+            panel.AddToggleOption(tab, "시모스/카메라 Y축 반전", InvertYAxis, (value) => { InvertYAxis = value; InvertYAxisChanged(value); }, "시모스와 카메라 조작의 Y축을 반전합니다.");
 
-            panel.AddHeading(tab, "Hidden/Advanced VR Settings(Those can cause motion sickness!)");
-            panel.AddToggleOption(tab, "Enable pitching(Looking Up/Down) while diving", !VROptions.disableInputPitch, (value) => { VROptions.disableInputPitch = !value; }, "This allows you to pitch up and down using the right thumbstick when diving. Can be very disorienting! I recommend to keep this disabled!");
-            panel.AddToggleOption(tab, "Enable desktop cinematics", VROptions.enableCinematics, (value) => { VROptions.enableCinematics = value; }, "Enables the games cinematics. Warning! Those move around your head and can cause motion sickness!");
-            panel.AddToggleOption(tab, "Skip intro", VROptions.skipIntro, (value) => { VROptions.skipIntro = value; }, "Skip the intro when starting a new game.");
+            panel.AddHeading(tab, "고급 VR 설정(멀미 위험)");
+            panel.AddToggleOption(tab, "잠수 중 상하 회전 사용", !VROptions.disableInputPitch, (value) => { VROptions.disableInputPitch = !value; }, "잠수 중 오른쪽 스틱으로 위아래를 바라보게 합니다. 어지러울 수 있어 기본적으로 끄는 것을 권장합니다.");
+            panel.AddToggleOption(tab, "데스크톱 컷신 사용", VROptions.enableCinematics, (value) => { VROptions.enableCinematics = value; }, "게임 기본 컷신을 사용합니다. 머리가 강제로 움직일 수 있어 멀미를 유발할 수 있습니다.");
+            panel.AddToggleOption(tab, "인트로 건너뛰기", VROptions.skipIntro, (value) => { VROptions.skipIntro = value; }, "새 게임 시작 시 인트로를 건너뜁니다.");
 
-            panel.AddHeading(tab, "Debug Options");
-            panel.AddToggleOption(tab, "Debug Overlays", IsDebugEnabled, (value) => { IsDebugEnabled = value; IsDebugChanged(value); }, "Enables Debug Overlays and Logs.");
-            panel.AddToggleOption(tab, "Always show controllers", AlwaysShowControllers, (value) => { AlwaysShowControllers = value; AlwaysShowControllersChanged(value); }, "Shows the controllers at all times.");
+            panel.AddHeading(tab, "디버그");
+            panel.AddToggleOption(tab, "디버그 오버레이", IsDebugEnabled, (value) => { IsDebugEnabled = value; IsDebugChanged(value); }, "디버그 오버레이와 로그를 사용합니다.");
+            panel.AddToggleOption(tab, "핑 디버그 로그", PingDebugLogs, (value) => { PingDebugLogs = value; }, "신호기/핑 화살표 진단 로그를 출력합니다. 문제 재현할 때만 켜세요.");
+            panel.AddToggleOption(tab, "컨트롤러 항상 표시", AlwaysShowControllers, (value) => { AlwaysShowControllers = value; AlwaysShowControllersChanged(value); }, "컨트롤러를 항상 표시합니다.");
             //panel.AddToggleOption(tab, "Always show laserpointer", AlwaysShowLaserPointer, (value) => { AlwaysShowLaserPointer = value; AlwaysShowLaserPointerChanged(value); }, "Show the laserpointer at all times.");
 
-            tab = panel.AddTab("Vehicles VR");
-            panel.AddHeading(tab, "Vehicle HUD");
-            panel.AddSliderOption(tab, "Vertical Offset", VehicleHudVerticalOffset, -0.3f, 0.3f, VehicleHudVerticalOffset, 0.01f, (value) => {
+            tab = panel.AddTab("탑승물 VR");
+            panel.AddHeading(tab, "탑승물 HUD");
+            panel.AddSliderOption(tab, "상하 위치", VehicleHudVerticalOffset, -0.3f, 0.3f, VehicleHudVerticalOffset, 0.01f, (value) => {
                 VehicleHudVerticalOffset = value;
                 VehicleHudVerticalOffsetChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Moves the vehicle HUD up/down relative to your VR headset.");
-            panel.AddSliderOption(tab, "Scale", VehicleHudScale, 0.5f, 2.0f, VehicleHudScale, 0.05f, (value) => {
+            }, SliderLabelMode.Float, "0.00", "탑승물 HUD를 VR 헤드셋 기준 위아래로 이동합니다.");
+            panel.AddSliderOption(tab, "크기", VehicleHudScale, 0.5f, 2.0f, VehicleHudScale, 0.05f, (value) => {
                 VehicleHudScale = value;
                 VehicleHudScaleChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Adjusts the size of the vehicle HUD.");
-            panel.AddSliderOption(tab, "Distance", VehicleHudDistance, -0.5f, 1.0f, VehicleHudDistance, 0.05f, (value) => {
+            }, SliderLabelMode.Float, "0.00", "탑승물 HUD의 크기를 조절합니다.");
+            panel.AddSliderOption(tab, "거리", VehicleHudDistance, -0.5f, 1.0f, VehicleHudDistance, 0.05f, (value) => {
                 VehicleHudDistance = value;
                 VehicleHudDistanceChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.00", "Moves the vehicle HUD closer or farther away.");
-            panel.AddChoiceOption<string>(tab, "Display", new string[] { "Flat", "Curved" }, VehicleHudCurved ? "Curved" : "Flat", (value) => {
-                VehicleHudCurved = value == "Curved";
+            }, SliderLabelMode.Float, "0.00", "탑승물 HUD를 더 가깝게 또는 멀리 이동합니다.");
+            panel.AddChoiceOption<string>(tab, "표시 방식", new string[] { "평면", "커브드" }, VehicleHudCurved ? "커브드" : "평면", (value) => {
+                VehicleHudCurved = value == "커브드";
                 VehicleHudCurvedChanged?.Invoke(VehicleHudCurved);
             });
-            panel.AddSliderOption(tab, "Curve Radius", VehicleHudCurveRadius, 0.5f, 5.0f, VehicleHudCurveRadius, 0.1f, (value) => {
+            panel.AddSliderOption(tab, "곡률 반경", VehicleHudCurveRadius, 0.5f, 5.0f, VehicleHudCurveRadius, 0.1f, (value) => {
                 VehicleHudCurveRadius = value;
                 VehicleHudCurveRadiusChanged?.Invoke(value);
-            }, SliderLabelMode.Float, "0.0", "Curve radius in meters. Smaller = more curved.");
-            panel.AddHeading(tab, "Comfort");
-            panel.AddToggleOption(tab, "Auto-Recenter on Vehicle Enter", AutoRecenterOnVehicleEnter, (value) => {
+            }, SliderLabelMode.Float, "0.0", "미터 단위 곡률 반경입니다. 값이 작을수록 더 많이 굽습니다.");
+            panel.AddHeading(tab, "편의");
+            panel.AddToggleOption(tab, "탑승/컷신 진입 시 자동 리센터", AutoRecenterOnVehicleEnter, (value) => {
                 AutoRecenterOnVehicleEnter = value;
-            }, "Automatically recenter VR tracking when entering a vehicle or cinematic.");
-            panel.AddSliderOption(tab, "SeaTruck Pilot Position Offset", SeaTruckZOffset, -0.4f, 0.4f, SeaTruckZOffset, 0.01f, (value) => { SeaTruckZOffset = value; }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, "SeaTruck Pilot Height Offset", SeaTruckYOffset, -0.4f, 0.4f, SeaTruckYOffset, 0.01f, (value) => { SeaTruckYOffset = value; }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, "Prawn Suit Position Offset", ExosuitZOffset, -0.4f, 0.4f, ExosuitZOffset, 0.01f, (value) => { ExosuitZOffset = value; }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, "Prawn Suit Height Offset", ExosuitYOffset, -0.4f, 0.4f, ExosuitYOffset, 0.01f, (value) => { ExosuitYOffset = value; }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, "Snowbike Position Offset", SnowBikeZOffset, -0.4f, 0.4f, SnowBikeZOffset, 0.01f, (value) => { SnowBikeZOffset = value; }, SliderLabelMode.Float, "0.00");
-            panel.AddSliderOption(tab, "Snowbike Height Offset", SnowBikeYOffset, -0.2f, 0.4f, SnowBikeYOffset, 0.01f, (value) => { SnowBikeYOffset = value; }, SliderLabelMode.Float, "0.00");
+            }, "탑승물이나 컷신에 들어갈 때 VR 추적을 자동으로 리센터합니다.");
+            panel.AddSliderOption(tab, "시트럭 조종석 앞뒤 위치", SeaTruckZOffset, -0.4f, 0.4f, SeaTruckZOffset, 0.01f, (value) => { SeaTruckZOffset = value; }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, "시트럭 조종석 높이", SeaTruckYOffset, -0.4f, 0.4f, SeaTruckYOffset, 0.01f, (value) => { SeaTruckYOffset = value; }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, "프론 슈트 앞뒤 위치", ExosuitZOffset, -0.4f, 0.4f, ExosuitZOffset, 0.01f, (value) => { ExosuitZOffset = value; }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, "프론 슈트 높이", ExosuitYOffset, -0.4f, 0.4f, ExosuitYOffset, 0.01f, (value) => { ExosuitYOffset = value; }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, "스노우폭스 앞뒤 위치", SnowBikeZOffset, -0.4f, 0.4f, SnowBikeZOffset, 0.01f, (value) => { SnowBikeZOffset = value; }, SliderLabelMode.Float, "0.00");
+            panel.AddSliderOption(tab, "스노우폭스 높이", SnowBikeYOffset, -0.2f, 0.4f, SnowBikeYOffset, 0.01f, (value) => { SnowBikeYOffset = value; }, SliderLabelMode.Float, "0.00");
         
 
-            panel.AddHeading(tab, "Options");
-            panel.AddToggleOption(tab, "Physical Driving", PhysicalDriving, (value) => { PhysicalDriving = value;  }, "Grip Vehicle controls to steer.");
-            panel.AddToggleOption(tab, "Locked Steering Grips", PhysicalLockedGrips, (value) => { PhysicalLockedGrips = value;  }, "Gripping the steering control locks your hands to the steering so you dont have to constantly grip. Grip again to unlock.");
+            panel.AddHeading(tab, "탑승물 조작");
+            panel.AddToggleOption(tab, "물리 운전", PhysicalDriving, (value) => { PhysicalDriving = value;  }, "탑승물 조작부를 잡아서 조향합니다.");
+            panel.AddToggleOption(tab, "조향 손 고정", PhysicalLockedGrips, (value) => { PhysicalLockedGrips = value;  }, "조작부를 잡으면 손이 고정되어 계속 잡고 있을 필요가 없습니다. 다시 잡으면 해제됩니다.");
             
-            panel.AddHeading(tab, "SeaTruck Left Hand");
-            panel.AddSliderOption(tab, "Center (Left/Right)", SeatruckLeftHorizontalCenterAngle, -10f, 10f, SeatruckLeftHorizontalCenterAngle, 1f, (value) => { SeatruckLeftHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
-            panel.AddSliderOption(tab, "Center (Up/Down)", SeatruckLeftVerticleCenterAngle, -10f, 10f, SeatruckLeftVerticleCenterAngle, 1f, (value) => { SeatruckLeftVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddHeading(tab, "시트럭 왼손");
+            panel.AddSliderOption(tab, "중심 (좌/우)", SeatruckLeftHorizontalCenterAngle, -10f, 10f, SeatruckLeftHorizontalCenterAngle, 1f, (value) => { SeatruckLeftHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddSliderOption(tab, "중심 (상/하)", SeatruckLeftVerticleCenterAngle, -10f, 10f, SeatruckLeftVerticleCenterAngle, 1f, (value) => { SeatruckLeftVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
             //Call dead zone "Sensitivity" for users
-            panel.AddSliderOption(tab, "Sensitivity", SeatruckLeftDeadZone, 1f, 10f, SeatruckLeftDeadZone, 1f, (value) => { SeatruckLeftDeadZone = value; }, SliderLabelMode.Float, "0", "Higher value means turns more quickly");
+            panel.AddSliderOption(tab, "감도", SeatruckLeftDeadZone, 1f, 10f, SeatruckLeftDeadZone, 1f, (value) => { SeatruckLeftDeadZone = value; }, SliderLabelMode.Float, "0", "값이 높을수록 더 빠르게 회전합니다.");
             //panel.AddSliderOption(tab, "Sensitivity", SeamothLeftSensitivity, 0f, 100f, SeamothLeftSensitivity, 1f, (value) => { SeamothLeftSensitivity = value; }, SliderLabelMode.Float, "0");
-            panel.AddToggleOption(tab, "Use Vertical Grip", SeatruckAltLeftGrip, (value) => { SeatruckAltLeftGrip = value;  }, "Use vertical hand grip rather than horizontal.");
+            panel.AddToggleOption(tab, "세로 그립 사용", SeatruckAltLeftGrip, (value) => { SeatruckAltLeftGrip = value;  }, "가로 그립 대신 세로 손잡이를 사용합니다.");
 
-            panel.AddHeading(tab, "SeaTruck Right Hand");
-            panel.AddSliderOption(tab, "Center (Left/Right)", SeatruckRightHorizontalCenterAngle, -10f, 10f, SeatruckRightHorizontalCenterAngle, 1f, (value) => { SeatruckRightHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
-            panel.AddSliderOption(tab, "Center (Up/Down)", SeatruckRightVerticleCenterAngle, -10f, 10f, SeatruckRightVerticleCenterAngle, 1f, (value) => { SeatruckRightVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddHeading(tab, "시트럭 오른손");
+            panel.AddSliderOption(tab, "중심 (좌/우)", SeatruckRightHorizontalCenterAngle, -10f, 10f, SeatruckRightHorizontalCenterAngle, 1f, (value) => { SeatruckRightHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddSliderOption(tab, "중심 (상/하)", SeatruckRightVerticleCenterAngle, -10f, 10f, SeatruckRightVerticleCenterAngle, 1f, (value) => { SeatruckRightVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
             //Call dead zone "Sensitivity" for users
-            panel.AddSliderOption(tab, "Sensitivity",SeatruckRightDeadZone, 1f, 10f, SeatruckRightDeadZone, 1f, (value) => { SeatruckRightDeadZone = value; }, SliderLabelMode.Float, "0", "Higher value means turns more quickly");
+            panel.AddSliderOption(tab, "감도",SeatruckRightDeadZone, 1f, 10f, SeatruckRightDeadZone, 1f, (value) => { SeatruckRightDeadZone = value; }, SliderLabelMode.Float, "0", "값이 높을수록 더 빠르게 회전합니다.");
             //panel.AddSliderOption(tab, "Sensitivity", SeamothRightSensitivity, 0f, 100f, SeamothRightSensitivity, 1f, (value) => { SeamothRightSensitivity = value; }, SliderLabelMode.Float, "0");
 
-            panel.AddHeading(tab, "Prawn Suit Left Hand");
-            panel.AddSliderOption(tab, "Center (Left/Right)", ExosuitLeftHorizontalCenterAngle, -10f, 10f, ExosuitLeftHorizontalCenterAngle, 1f, (value) => { ExosuitLeftHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
-            panel.AddSliderOption(tab, "Center (Up/Down)", ExosuitLeftVerticleCenterAngle, -10f, 10f, ExosuitLeftVerticleCenterAngle, 1f, (value) => { ExosuitLeftVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddHeading(tab, "프론 슈트 왼손");
+            panel.AddSliderOption(tab, "중심 (좌/우)", ExosuitLeftHorizontalCenterAngle, -10f, 10f, ExosuitLeftHorizontalCenterAngle, 1f, (value) => { ExosuitLeftHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddSliderOption(tab, "중심 (상/하)", ExosuitLeftVerticleCenterAngle, -10f, 10f, ExosuitLeftVerticleCenterAngle, 1f, (value) => { ExosuitLeftVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
             //Call dead zone "Sensitivity" for users
-            panel.AddSliderOption(tab, "Sensitivity", ExosuitLeftDeadZone, 1f, 10f, ExosuitLeftDeadZone, 1f, (value) => { ExosuitLeftDeadZone = value; }, SliderLabelMode.Float, "0", "Higher value means turns more quickly");
+            panel.AddSliderOption(tab, "감도", ExosuitLeftDeadZone, 1f, 10f, ExosuitLeftDeadZone, 1f, (value) => { ExosuitLeftDeadZone = value; }, SliderLabelMode.Float, "0", "값이 높을수록 더 빠르게 회전합니다.");
             //panel.AddSliderOption(tab, "Sensitivity", SeamothLeftSensitivity, 0f, 100f, SeamothLeftSensitivity, 1f, (value) => { SeamothLeftSensitivity = value; }, SliderLabelMode.Float, "0");
 
-            panel.AddHeading(tab, "Prawn Suit Right Hand");
-            panel.AddSliderOption(tab, "Center (Left/Right)", ExosuitRightHorizontalCenterAngle, -10f, 10f, ExosuitRightHorizontalCenterAngle, 1f, (value) => { ExosuitRightHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
-            panel.AddSliderOption(tab, "Center (Up/Down)", ExosuitRightVerticleCenterAngle, -10f, 10f, ExosuitRightVerticleCenterAngle, 1f, (value) => { ExosuitRightVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddHeading(tab, "프론 슈트 오른손");
+            panel.AddSliderOption(tab, "중심 (좌/우)", ExosuitRightHorizontalCenterAngle, -10f, 10f, ExosuitRightHorizontalCenterAngle, 1f, (value) => { ExosuitRightHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddSliderOption(tab, "중심 (상/하)", ExosuitRightVerticleCenterAngle, -10f, 10f, ExosuitRightVerticleCenterAngle, 1f, (value) => { ExosuitRightVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
             //Call dead zone "Sensitivity" for users
-            panel.AddSliderOption(tab, "Sensitivity", ExosuitRightDeadZone, 1f, 10f, ExosuitRightDeadZone, 1f, (value) => { ExosuitRightDeadZone = value; }, SliderLabelMode.Float, "0", "Higher value means turns more quickly");
+            panel.AddSliderOption(tab, "감도", ExosuitRightDeadZone, 1f, 10f, ExosuitRightDeadZone, 1f, (value) => { ExosuitRightDeadZone = value; }, SliderLabelMode.Float, "0", "값이 높을수록 더 빠르게 회전합니다.");
             //panel.AddSliderOption(tab, "Sensitivity", SeamothRightSensitivity, 0f, 100f, SeamothRightSensitivity, 1f, (value) => { SeamothRightSensitivity = value; }, SliderLabelMode.Float, "0");
 
-            panel.AddHeading(tab, "SnowFox Left Hand");
+            panel.AddHeading(tab, "스노우폭스 왼손");
             //panel.AddSliderOption(tab, "Center (Left/Right)", SnowbikeLeftHorizontalCenterAngle, -10f, 10f, SnowbikeLeftHorizontalCenterAngle, 1f, (value) => { SnowbikeLeftHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
             //panel.AddSliderOption(tab, "Center (Up/Down)", SnowbikeLeftVerticleCenterAngle, -10f, 10f, SnowbikeLeftVerticleCenterAngle, 1f, (value) => { SnowbikeLeftVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
             //Call dead zone "Sensitivity" for users
-            panel.AddSliderOption(tab, "Sensitivity", SnowbikeLeftDeadZone, 1f, 10f, SnowbikeLeftDeadZone, 1f, (value) => { SnowbikeLeftDeadZone = value; }, SliderLabelMode.Float, "0", "Higher value means turns more quickly");
+            panel.AddSliderOption(tab, "감도", SnowbikeLeftDeadZone, 1f, 10f, SnowbikeLeftDeadZone, 1f, (value) => { SnowbikeLeftDeadZone = value; }, SliderLabelMode.Float, "0", "값이 높을수록 더 빠르게 회전합니다.");
             //panel.AddSliderOption(tab, "Sensitivity", SeamothLeftSensitivity, 0f, 100f, SeamothLeftSensitivity, 1f, (value) => { SeamothLeftSensitivity = value; }, SliderLabelMode.Float, "0");
 
-            panel.AddHeading(tab, "SnowFox Right Hand");
+            panel.AddHeading(tab, "스노우폭스 오른손");
             //panel.AddSliderOption(tab, "Center (Left/Right)", SnowbikeRightHorizontalCenterAngle, -10f, 10f, SnowbikeRightHorizontalCenterAngle, 1f, (value) => { SnowbikeRightHorizontalCenterAngle = value; }, SliderLabelMode.Float, "0");
-            panel.AddSliderOption(tab, "Center (Accelerator)", SnowbikeRightVerticleCenterAngle, -10f, 10f, SnowbikeRightVerticleCenterAngle, 1f, (value) => { SnowbikeRightVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
+            panel.AddSliderOption(tab, "중심 (가속)", SnowbikeRightVerticleCenterAngle, -10f, 10f, SnowbikeRightVerticleCenterAngle, 1f, (value) => { SnowbikeRightVerticleCenterAngle = value; }, SliderLabelMode.Float, "0");
             //Call dead zone "Sensitivity" for users
-            panel.AddSliderOption(tab, "Sensitivity", SnowbikeRightDeadZone, 1f, 10f, SnowbikeRightDeadZone, 1f, (value) => { SnowbikeRightDeadZone = value; }, SliderLabelMode.Float, "0", "Higher value means turns more quickly");
+            panel.AddSliderOption(tab, "감도", SnowbikeRightDeadZone, 1f, 10f, SnowbikeRightDeadZone, 1f, (value) => { SnowbikeRightDeadZone = value; }, SliderLabelMode.Float, "0", "값이 높을수록 더 빠르게 회전합니다.");
             //panel.AddSliderOption(tab, "Sensitivity", SeamothRightSensitivity, 0f, 100f, SeamothRightSensitivity, 1f, (value) => { SeamothRightSensitivity = value; }, SliderLabelMode.Float, "0");
-            panel.AddToggleOption(tab, "Invert Accelerator", SnowbikeAltAccelerator, (value) => { SnowbikeAltAccelerator = value;  }, "Twist forward to accelerate.");
+            panel.AddToggleOption(tab, "가속 반전", SnowbikeAltAccelerator, (value) => { SnowbikeAltAccelerator = value;  }, "앞으로 비틀어 가속합니다.");
 
         }
     }
@@ -503,7 +526,7 @@ namespace SubmersedVR
     {
         public static void Postfix(uGUI_OptionsPanel __instance)
         {
-			__instance.AddToggleOption(__instance.tabs.Count - 1, "Fullscreen", Screen.fullScreen, new UnityAction<bool>(__instance.OnFullscreenChanged), null);
+			__instance.AddToggleOption(__instance.tabs.Count - 1, "전체 화면", Screen.fullScreen, new UnityAction<bool>(__instance.OnFullscreenChanged), null);
         }
     }
 
@@ -513,44 +536,44 @@ namespace SubmersedVR
         //Get rid of the default Ambient Occlusion Option
         public static bool Prefix(uGUI_OptionsPanel __instance)
         {
-            int tabIndex = __instance.AddTab("Graphics");
-            __instance.AddSliderOption(tabIndex, "Gamma", GammaCorrection.gamma, 0.1f, 2.8f, 1f, 0.01f, delegate(float value)
+            int tabIndex = __instance.AddTab("그래픽");
+            __instance.AddSliderOption(tabIndex, "감마", GammaCorrection.gamma, 0.1f, 2.8f, 1f, 0.01f, delegate(float value)
             {
                 GammaCorrection.gamma = value;
             }, SliderLabelMode.Float, "0.00", null);
             int qualityPresetIndex = __instance.GetQualityPresetIndex();
-            __instance.qualityPresetOption = __instance.AddChoiceOption(tabIndex, "Preset", uGUI_OptionsPanel.presetOptions, qualityPresetIndex, new UnityAction<int>(__instance.OnQualityPresetChanged), null);
+            __instance.qualityPresetOption = __instance.AddChoiceOption(tabIndex, "프리셋", uGUI_OptionsPanel.presetOptions, qualityPresetIndex, new UnityAction<int>(__instance.OnQualityPresetChanged), null);
             __instance.ApplyQualityPreset(qualityPresetIndex);
-            __instance.AddHeading(tabIndex, "Advanced");
+            __instance.AddHeading(tabIndex, "고급");
             if (uGUI_MainMenu.main)
             {
                 int currentIndex;
                 string[] detailOptions = uGUI_OptionsPanel.GetDetailOptions(out currentIndex);
-                __instance.detailOption = __instance.AddChoiceOption(tabIndex, "Detail", detailOptions, currentIndex, new UnityAction<int>(__instance.OnDetailChanged), null);
+                __instance.detailOption = __instance.AddChoiceOption(tabIndex, "세부 묘사", detailOptions, currentIndex, new UnityAction<int>(__instance.OnDetailChanged), null);
             }
-            __instance.waterQualityOption = __instance.AddChoiceOption<WaterSurface.Quality>(tabIndex, "WaterQuality", WaterSurface.GetQualityOptions(), WaterSurface.GetQuality(), new UnityAction<WaterSurface.Quality>(__instance.OnWaterQualityChanged), null);
-            __instance.skyboxQualityOption = __instance.AddChoiceOption(tabIndex, "SkyboxQuality", uGUI_OptionsPanel.skyboxQualityOptions, VolumeCloudRenderer.GetQuality(), new UnityAction<int>(__instance.OnASkyboxqualityChanged), null);
+            __instance.waterQualityOption = __instance.AddChoiceOption<WaterSurface.Quality>(tabIndex, "물 품질", WaterSurface.GetQualityOptions(), WaterSurface.GetQuality(), new UnityAction<WaterSurface.Quality>(__instance.OnWaterQualityChanged), null);
+            __instance.skyboxQualityOption = __instance.AddChoiceOption(tabIndex, "하늘 품질", uGUI_OptionsPanel.skyboxQualityOptions, VolumeCloudRenderer.GetQuality(), new UnityAction<int>(__instance.OnASkyboxqualityChanged), null);
             int currentIndex2;
             string[] antiAliasingOptions = uGUI_OptionsPanel.GetAntiAliasingOptions(out currentIndex2);
-            __instance.aaModeOption = __instance.AddChoiceOption(tabIndex, "Antialiasing", antiAliasingOptions, currentIndex2, new UnityAction<int>(__instance.OnAAmodeChanged), null);
-            __instance.aaQualityOption = __instance.AddChoiceOption(tabIndex, "AntialiasingQuality", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetAaQuality(), new UnityAction<int>(__instance.OnAAqualityChanged), null);
-            __instance.bloomOption = __instance.AddToggleOption(tabIndex, "Bloom", UwePostProcessingManager.GetBloomEnabled(), new UnityAction<bool>(__instance.OnBloomChanged), null);
+            __instance.aaModeOption = __instance.AddChoiceOption(tabIndex, "안티앨리어싱", antiAliasingOptions, currentIndex2, new UnityAction<int>(__instance.OnAAmodeChanged), null);
+            __instance.aaQualityOption = __instance.AddChoiceOption(tabIndex, "안티앨리어싱 품질", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetAaQuality(), new UnityAction<int>(__instance.OnAAqualityChanged), null);
+            __instance.bloomOption = __instance.AddToggleOption(tabIndex, "블룸", UwePostProcessingManager.GetBloomEnabled(), new UnityAction<bool>(__instance.OnBloomChanged), null);
             if (!XRSettings.enabled)
             {
-                __instance.lensDirtOption = __instance.AddToggleOption(tabIndex, "LensDirt", UwePostProcessingManager.GetBloomLensDirtEnabled(), new UnityAction<bool>(__instance.OnBloomLensDirtChanged), null);
+                __instance.lensDirtOption = __instance.AddToggleOption(tabIndex, "렌즈 먼지", UwePostProcessingManager.GetBloomLensDirtEnabled(), new UnityAction<bool>(__instance.OnBloomLensDirtChanged), null);
                 if (!GraphicsUtil.IsOpenGL())
                 {
-                    __instance.dofOption = __instance.AddToggleOption(tabIndex, "DepthOfField", UwePostProcessingManager.GetDofEnabled(), new UnityAction<bool>(__instance.OnDofChanged), null);
+                    __instance.dofOption = __instance.AddToggleOption(tabIndex, "피사계 심도", UwePostProcessingManager.GetDofEnabled(), new UnityAction<bool>(__instance.OnDofChanged), null);
                 }
-                __instance.motionBlurQualityOption = __instance.AddChoiceOption(tabIndex, "MotionBlurQuality", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetMotionBlurQuality(), new UnityAction<int>(__instance.OnMotionBlurQualityChanged), null);
+                __instance.motionBlurQualityOption = __instance.AddChoiceOption(tabIndex, "모션 블러 품질", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetMotionBlurQuality(), new UnityAction<int>(__instance.OnMotionBlurQualityChanged), null);
             }
             //__instance.aoQualityOption = __instance.AddChoiceOption(tabIndex, "AmbientOcclusion", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetAoQuality(), new UnityAction<int>(this.OnAOqualityChanged), null);
             if (!XRSettings.enabled)
             {
-                __instance.ssrQualityOption = __instance.AddChoiceOption(tabIndex, "ScreenSpaceReflections", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetSsrQuality(), new UnityAction<int>(__instance.OnSSRqualityChanged), null);
-                __instance.ditheringOption = __instance.AddToggleOption(tabIndex, "Dithering", UwePostProcessingManager.GetDitheringEnabled(), new UnityAction<bool>(__instance.OnDitheringChanged), null);
+                __instance.ssrQualityOption = __instance.AddChoiceOption(tabIndex, "스크린 공간 반사", uGUI_OptionsPanel.postFXQualityNames, UwePostProcessingManager.GetSsrQuality(), new UnityAction<int>(__instance.OnSSRqualityChanged), null);
+                __instance.ditheringOption = __instance.AddToggleOption(tabIndex, "디더링", UwePostProcessingManager.GetDitheringEnabled(), new UnityAction<bool>(__instance.OnDitheringChanged), null);
             }
-            __instance.weatherQualityOption = __instance.AddChoiceOption(tabIndex, "WeatherQuality", uGUI_OptionsPanel.weatherQualityOptions, VFXWeatherManager.GetQuality(), new UnityAction<int>(__instance.OnAWeatherQualityChanged), null);       
+            __instance.weatherQualityOption = __instance.AddChoiceOption(tabIndex, "날씨 품질", uGUI_OptionsPanel.weatherQualityOptions, VFXWeatherManager.GetQuality(), new UnityAction<int>(__instance.OnAWeatherQualityChanged), null);       
         
             return false;
         }

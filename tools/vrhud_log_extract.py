@@ -23,7 +23,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_LOG_DIR = REPO_ROOT / "test_log"
 DEFAULT_STATE = DEFAULT_LOG_DIR / ".vrhud_log_state.json"
 DEFAULT_PATTERNS = [
-    r"\[VRHud/(Graphic|CurveNode|TMP|TMPRestore|PopupRoot|HandReticle|ScannerIcon|CameraLevel)\]",
+    r"\[VRHud/(Graphic|CurveNode|TMP|TMPRestore|PopupRoot|HandReticle|ScannerIcon|CameraLevel|Ping|Pings)\]",
     r"\b(PowerIndicator|HUDPowerStatus|전력|PopupNotification|Unlock|Journal|CallAlAn|ErrorMessageCanvas|MessageInstance|mode=|segments=|afterZ=|span=|skipCurve|popupLocal|popupArc|popupRelative|relative|vertex)\b",
 ]
 
@@ -168,6 +168,10 @@ def extract_lines(path: Path, patterns: list[re.Pattern[str]], limit: int) -> tu
                     counts["ScannerIcon"] += 1
                 elif "[VRHud/CameraLevel]" in line:
                     counts["CameraLevel"] += 1
+                elif "[VRHud/Pings]" in line:
+                    counts["Pings"] += 1
+                elif "[VRHud/Ping]" in line:
+                    counts["Ping"] += 1
                 elif "[VRHud/PopupRoot]" in line:
                     counts["PopupRoot"] += 1
                 elif "[VRHud/GUIHand]" in line:
@@ -240,7 +244,10 @@ def main() -> int:
         print("Content extraction skipped. Pass --extract to read matching log lines.")
 
     if not args.no_write_state:
-        write_state(args.state, current)
+        try:
+            write_state(args.state, current)
+        except OSError as exc:
+            print(f"warning: could not write state file: {exc}", file=sys.stderr)
     return 0
 
 

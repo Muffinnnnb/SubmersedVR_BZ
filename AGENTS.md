@@ -325,6 +325,7 @@ TalkingHead
 | 캐릭터 이름/초상화 위치 조절 불가 | `TalkingHead` 오브젝트가 `ScreenCanvas` 직계 자식으로 고정. 키워드 검색에 "talking" 미포함으로 이동 안 됨 | `MoveDialogueElementsToSubtitleCanvas()` 키워드에 "talking" 추가 → `SubtitleCanvas`로 이동, 자막 위치 설정 공유 |
 | 게임 HUD 크기 슬라이더 조작 시 UI 사라짐 | `uGUI_CanvasScaler.UpdateFrustum`이 scale 리셋 | Postfix에서 `screenCanvas.localScale` 재적용 |
 | 기지 밖에서 `전력` TMP 잔상/늘어짐 | `uGUI_PowerIndicator`가 TMP 오브젝트가 아니라 `TextMeshProUGUI.enabled=false`만 하는데, `TmpHudCurveEffect`가 disabled TMP에 `ForceMeshUpdate()`를 호출 | TMP 본체가 disabled면 커브 계산 중단, `ClearMesh(true)` + `canvasRenderer.Clear()`로 렌더 메시 제거 |
+| 컷신/탑승물 이후 화면 pitch/roll 고정 | `MainCameraControl.OnUpdate` 대체 패치가 PDA/locked mode의 수평 복구는 유지하지만 컷신 종료 후 일반 조작 복귀 시 수평 복구를 명시적으로 수행하지 않음 | `CameraLevelRestore`가 컷신 종료/스킵/차량 상태 전환 후 조작 가능 상태에서 pitch/roll만 보간 복구. yaw와 VR recenter는 건드리지 않음 |
 
 ### 반복 방지용 실패 이력
 
@@ -576,41 +577,140 @@ TalkingHead
 
 ---
 
-## 현재 수정 계획서 — 컷신 이후 카메라 수평 복구
+## 현재 수정 계획서 — 핑/신호기 투영·가장자리·화살표 보정
 
 ### 문제
 
-아이템 줍기, 기울어진 탑승물 탑승/하차 등 짧은 카메라 컷신 후 화면의 상하/기울기 각도가 고정되어 정상 조작 상태로 돌아와도 복구되지 않는다. PDA를 열면 각도가 복구되므로, 게임의 카메라 reset/leveling 경로는 존재하지만 컷신 종료 직후 VR 경로에서 자동으로 실행되지 않는 것으로 보인다.
+신호기/핑 UI가 대략적인 방향은 맞지만 고개를 돌릴수록 정확한 위치에서 조금씩 어긋난다. 정면을 보고 있을 때는 비교적 맞는다.
+1차 진단 패치 제거 후 사용자 테스트 결과, 고개를 돌릴 때 핑이 움직이는 방향은 정상이나 이동량이 너무 적어 실제 사물 위치보다 덜 따라온다.
+`uGUI_Ping.SetScale` Postfix 방식에서는 컨트롤러가 정상 작동했고, `핑 위치 보정`을 2.0까지 올리면 좌우 움직임은 거의 정확해졌다. 남은 문제는 상하 움직임 보정이다.
+2차 테스트 결과 좌우는 2.0이 적당하고, 상하는 3.0도 부족하다. 또한 핑이 화면 가장자리에 붙는 범위가 좌우는 너무 넓고 상하는 너무 좁아 아직 여유 시야가 있는데도 위/아래에서 막힌다.
+가끔 좌우 화면 밖 핑의 화살표가 화면 바깥쪽이 아니라 안쪽을 가리키는 경우가 있다.
+3차 테스트 결과 최적값은 좌우 1.85, 상하 3.5이며 가장자리 범위 조절은 정상이다. 남은 문제는 핑 투영 기준점이 HUD 기준보다 위에 잡힌 느낌이고, 좌우 화면 밖 화살표가 여전히 안쪽을 가리키는 점이다. 상하 화살표는 정상이다.
+4차 테스트 결과 가장자리 기준 위치는 내려와서 좋아졌지만, `HUD 상하 위치`가 내려간 만큼 핑 내용은 오히려 올라간 것처럼 보인다. 또한 X 부호를 무조건 뒤집은 화살표 보정은 정상/비정상 케이스를 서로 뒤바꿨다.
+5차 테스트 결과 핑이 살짝 내려갔다. 검증 완료된 움직임 배율은 건드리지 말고 별도 위치 조정 슬라이더로 미세 조정한다. 화살표는 여전히 불규칙하며, 일부 핑은 왼쪽 화면 밖에서는 정상인데 오른쪽 화면 밖에서도 왼쪽 화살표로 표시된다.
 
 ### 원인 분석
 
-- `MainCameraControl.cinematicMode` setter와 `ResetCamera()` IL 확인 결과, 기본 게임은 컷신 진입/종료 시 `rotationY`, `cameraUPTransform`, `cameraOffsetTransform`, `transform.localEulerAngles`를 재정렬하는 루틴을 가진다.
-- 현재 모드는 `SnapTurning.cs`의 `MainCameraControl.OnUpdate` Prefix가 원본 카메라 업데이트를 완전히 대체한다.
-- 이 커스텀 업데이트는 PDA/locked mode 진입 시에는 `rotationY`, `cameraUPTransform`, `transform.localEulerAngles.x`를 0으로 lerp하지만, 컷신 종료 후 일반 조작으로 돌아오는 전환에서는 같은 수평 복구를 명시적으로 하지 않는다.
-- 결과적으로 컷신/탑승물 애니메이션에서 남은 pitch/roll 또는 `rotationY`가 다음 일반 카메라 계산의 기준값으로 남아 고정된다.
+- `uGUI_Pings.OnWillRenderCanvases()` IL 확인 결과, 핑 위치 계산은 `MainCamera.camera`의 `worldToLocalMatrix`, `aspect`, `fieldOfView`, `forward`, `position` 기준으로 수행된다.
+- 원본 계산은 `local.x / (abs(local.z) * tan(fieldOfView/2) * aspect)`와 `local.y / (abs(local.z) * tan(fieldOfView/2))`로 normalized 화면 좌표를 만든 뒤 ping canvas half-size를 곱한다.
+- VR에서 `Camera.fieldOfView`가 실제 HUD 체감 FOV보다 넓게 잡히면 denominator가 커지고, 같은 머리 회전/월드 각도에도 ping 이동량이 부족해진다.
+- 사용자 관찰이 "방향은 맞고 이동량만 부족"이므로, 계산 기준 자체를 바꾸기보다 centered ping canvas 좌표에 보정 배율을 곱하는 것이 가장 작은 수정이다.
+- 원본 `OnWillRenderCanvases`는 화면 밖일 때 `SetAngle(atan2(y,x))`로 화살표를 먼저 회전시킨 뒤 마지막에 `SetScale()`을 호출한다. 현재 보정은 `SetScale` Postfix에서 위치를 다시 바꾸므로, 화살표 각도가 보정 전 위치 기준으로 남을 수 있다.
+- 도보 HUD 실제 기준 Y는 `FootHudPosition() = 0.1 + HudVerticalOffset`이다. 핑 보정은 parent rect 중앙만 기준으로 쓰고 있어, HUD 위치 조정과 기준점이 분리되어 보일 수 있다.
+- 4차 수식은 HUD 기준점을 스케일 피벗으로도 사용했다. `adjusted = center + (source - center) * scale` 구조라서 상하 배율이 3.5처럼 1보다 클 때 기준점을 내리면 `(1 - scale) * center` 항 때문에 핑 내용이 반대로 올라간다.
+- 좌우 화살표는 X 부호를 무조건 뒤집으면 기존에 맞던 케이스도 틀어진다. 거리/behind 여부를 `SetScale` 후처리에서 직접 알 수 없으므로, 현재 화살표 방향 벡터가 최종 표시 위치 벡터와 반대일 때만 180도 보정하는 방식이 더 안전하다.
+- 5차 화살표 피드백상 여전히 추측 보정으로는 부족하다. 거리, behind 판정, 화살표 graphic의 기본 방향, 원본 `SetAngle()` 값 중 어느 값이 실제 화살표 방향과 불일치하는지 로그로 분리해야 한다.
 
 ### 수정 계획
 
-- `SnapTurning.cs`에 작은 `CameraLevelRestore` 유틸을 추가한다.
-- `MainCameraControlFixer`에서 `cinematicMode`, `Player.cinematicModeActive`, 차량/탑승 상태 전환을 감지하면 짧은 복구 window를 연다.
-- 복구 window 동안 플레이어 조작이 가능한 상태가 되면:
-  - `rotationY`, `camRotationY`를 0으로 되돌린다.
-  - `MainCameraControl.transform`, `cameraUPTransform`, `cameraOffsetTransform`, `viewModel`의 X/Z 기울기를 0으로 보간한다.
-  - Yaw는 보존해 사용자가 바라보는 좌우 방향을 강제로 돌리지 않는다.
-- `PlayerCinematicController.EndCinematicMode` Postfix에서도 복구 요청을 걸어 OnUpdate 전환 감지가 놓치는 컷신 종료를 보완한다.
-- 로그는 `[VRHud/CameraLevel]` 접두사로 요청/적용을 제한 출력한다.
+- `uGUI_Pings.OnWillRenderCanvases`는 Postfix/Transpiler 모두 금지한다. 이 메서드를 패치하면 게임 시작 직후 컨트롤러 입력이 사라지는 부작용이 재현됐다.
+- 대신 `uGUI_Ping.SetScale` Postfix에서 이미 원본이 계산해 둔 `rectTransform.anchoredPosition`만 읽고, ping canvas 중심 기준 상대 좌표를 보정한다.
+- 좌우 배율은 기존 저장값 호환을 위해 `Settings.PingProjectionScale`을 유지하고, 상하 배율은 새 `Settings.PingProjectionVerticalScale`로 분리한다.
+- 옵션은 `핑 좌우 위치 보정`, `핑 상하 위치 보정` 두 슬라이더로 나눈다. 좌우 기본값은 1.35, 범위는 0.5~3.0이다. 상하는 3.0도 부족했으므로 범위를 0.5~8.0으로 확장한다.
+- 가장자리 고정 범위도 `핑 좌우 가장자리 범위`, `핑 상하 가장자리 범위`로 분리한다. 1.0은 현재 parent rect 기준이고, 값이 작으면 중심 쪽에서 더 빨리 막히며, 값이 크면 더 바깥까지 이동한다.
+- 방향 계산, 표시 여부, 거리/텍스트/화살표 각도 계산은 원본 코드 그대로 둔다.
+- 단, 화살표가 이미 켜진 상태라면 최종 보정/클램프된 위치 기준으로 `SetAngle()`을 다시 호출해 안쪽을 가리키는 케이스를 줄인다.
+- 핑 중심점 Y는 `0.1 + HudVerticalOffset`을 `0.00085 * HudScale`로 나눈 canvas pixel 값만큼 이동해 도보 HUD 기준과 동기화한다.
+- HUD 기준점 Y는 최종 표시 중심/가장자리 기준에만 더한다. 투영 배율의 피벗은 원본 ping canvas 중심으로 유지해 HUD 오프셋이 반대로 증폭되지 않게 한다.
+- 화살표는 새 각도를 직접 계산하지 않는다. 원본 `SetAngle()` 결과를 읽고, 현재 방향 벡터와 최종 표시 위치 벡터의 내적이 음수일 때만 180도 뒤집는다.
+- `핑 좌우/상하 위치 보정` 라벨은 실제 의미에 맞춰 `핑 좌우/상하 움직임 배율`로 변경한다.
+- `PingVerticalOffset`과 `핑 상하 위치 조정` 슬라이더를 추가한다. 기존 배율/가장자리 값은 유지하고, 최종 display center에만 위치 offset을 더한다.
+- `PingDebugLogs` 옵션을 추가한다. 켜져 있을 때 `[VRHud/Ping]` 로그에 원본 anchored position, 상대 벡터, 최종 벡터, limit, label/distance text, arrow enabled, arrow angle before/after, dot, correction 여부를 제한 출력한다.
+- 한글 표시가 정상 확인되었으므로 Submersed VR/탑승물 VR/앰비언트 오클루전 옵션 표시 문자열을 한글화한다. 내부 저장값에 의존하는 선택지는 표시값만 한글로 바꾸고 저장값은 기존 영문 값을 유지한다.
+
+### 실패 이력
+
+- 1차 시도: `uGUI_Pings.OnWillRenderCanvases` Postfix에서 projection 값을 읽는 방식.
+- 결과: 게임 시작 직후 컨트롤러 입력이 작동하지 않는 부작용 발생. `OnWillRenderCanvases`는 입력/UI 초기화와 같은 프레임에 매우 이른 빈도로 호출되므로 진단 Postfix도 안전하지 않다고 판단하고 즉시 제거한다.
+- 2차 시도: `uGUI_Pings.OnWillRenderCanvases` Transpiler로 위치 배율만 삽입. 결과 역시 게임 시작 직후 컨트롤러가 사라짐. 결론: `uGUI_Pings.OnWillRenderCanvases` 자체를 패치 대상에서 제외한다.
+- 로그 추출 스크립트의 `[VRHud/Pings]` 패턴은 다음 안전한 진단용으로 유지한다.
 
 ### 테스트 요청
 
-1. 아이템 줍기처럼 화면이 짧게 기울어지는 컷신 후 조작 가능 상태로 돌아왔을 때 상하 각도가 자동 복구되는지 확인한다.
-2. 기울어진 탑승물 탑승/하차 후 PDA를 열지 않아도 화면 pitch/roll이 정상화되는지 확인한다.
-3. 좌우 방향(yaw)이 임의로 튀거나 강제 리센터되는 느낌이 없는지 확인한다.
-4. 문제가 남으면 짧게 1회 재현한 로그를 `test_log/`에 넣는다. `[VRHud/CameraLevel]` 줄만 우선 확인한다.
+1. 게임 시작 직후 컨트롤러가 정상 작동하는지 먼저 확인한다.
+2. 신호기/핑 하나를 보이게 두고 `핑 좌우 위치 보정`은 이전 테스트 기준 2.0 근처에서 시작한다.
+3. 상하가 부족하면 `핑 상하 위치 보정`을 3.0 이상으로 올리고, 과하면 내린다.
+4. 좌우 가장자리에서 너무 늦게 막히면 `핑 좌우 가장자리 범위`를 내리고, 위/아래가 너무 빨리 막히면 `핑 상하 가장자리 범위`를 올린다.
+5. 화면 밖 화살표가 안쪽을 가리키는 경우가 남으면, 좌/우/상/하 중 어느 가장자리에서 발생했는지 보고한다.
+6. `HUD 상하 위치`를 움직였을 때 핑 투영 기준점도 같은 방향으로 따라오는지 확인한다.
+7. 화살표 문제 재현 시 `핑 디버그 로그`를 켜고 좌/우 화면 밖 케이스를 짧게 재현한 뒤 로그를 `test_log/`에 복사한다.
 
-### 2026-05-17 적용
+### 2026-05-18 적용
 
-- `SnapTurning.cs`에 `CameraLevelRestore` 추가.
-- `PlayerCinematicController.EndCinematicMode`, `SkipCinematic`, `MainCameraControlFixer`의 cinematic/vehicle 상태 전환에서 복구 요청을 건다.
-- 복구는 플레이어 조작 가능 상태에서만 적용하며, `rotationY`, `camRotationY`, `MainCameraControl.transform`, `cameraUPTransform`, `cameraOffsetTransform`, `viewModel`의 pitch/roll을 수평으로 보간한다.
-- yaw는 유지하고 `VRUtil.Recenter()`는 호출하지 않는다.
-- 빌드 확인: C# 컴파일과 DLL 생성 성공. 기존 `SubmersedVR_BZ_0.8.1.zip`이 있어 post-build zip 단계만 실패.
+- 실패한 `uGUI_Pings.OnWillRenderCanvases` Transpiler 제거.
+- `uGUI_Ping.SetScale` Postfix 기반 `PingProjectionScaleFixer`로 변경.
+- `Settings.PingProjectionScale` 추가 및 옵션 슬라이더 `핑 위치 보정` 추가.
+- 새 옵션은 한글 표시 테스트를 겸해 한글 라벨/설명으로 넣었다.
+
+### 2026-05-18 2차 적용
+
+- 사용자 확인: 컨트롤러 정상. 좌우는 슬라이더 2.0에서 거의 정확. 상하는 여전히 이상함.
+- `Settings.PingProjectionVerticalScale` 추가.
+- `PingProjectionScaleFixer`에서 X/Y 상대 좌표를 각각 `PingProjectionScale`, `PingProjectionVerticalScale`로 별도 보정.
+- 기존 `핑 위치 보정`은 `핑 좌우 위치 보정`으로 변경하고, `핑 상하 위치 보정`을 추가.
+- 두 핑 보정 슬라이더 범위를 0.5~3.0으로 확장.
+- 한글 표시가 정상 확인되어 모드 옵션 라벨/설명/선택지를 한글화. `ShowLaserPointer`, AO 방식/샘플 같은 내부 문자열 설정은 기존 영문 저장값으로 변환해 호환성을 유지한다.
+
+### 2026-05-18 3차 적용
+
+- `Settings.PingProjectionVerticalScale` 범위를 0.5~8.0으로 확장.
+- `Settings.PingHorizontalEdgeScale`, `Settings.PingVerticalEdgeScale` 추가.
+- `PingProjectionScaleFixer`에서 최종 위치 클램프를 parent rect 고정값이 아니라 axis별 edge scale로 계산.
+- `uGUI_Ping.arrow.enabled`가 true인 경우 최종 위치 기준으로 `SetAngle()`을 재호출.
+- 빌드 확인: C# 컴파일과 DLL 생성 성공. 기존 `InputTracking.Recenter()` obsolete 경고 1개만 남음.
+
+### 2026-05-18 4차 적용
+
+- 핑 보정 기본값을 사용자 검증값에 맞춰 좌우 1.85, 상하 3.5로 변경.
+- `PingProjectionScaleFixer` 기준점을 parent rect 중앙에서 `HUD 상하 위치`가 반영된 기준점으로 변경.
+- 좌우 지배 벡터의 화살표 각도 재계산 시 X 부호를 뒤집어 좌/우 화면 밖 화살표가 바깥쪽을 가리키도록 보정.
+- 빌드 확인: C# 컴파일과 DLL 생성 성공. 기존 `InputTracking.Recenter()` obsolete 경고 1개만 남음.
+
+### 2026-05-18 5차 적용
+
+- 투영 배율 피벗은 parent rect 중앙으로 되돌리고, `HUD 상하 위치` 기준은 최종 display center에만 더한다.
+- 가장자리 클램프도 최종 display center 기준으로 유지한다.
+- 화살표 보정은 무조건 X 반전이 아니라, 원본 화살표 방향이 최종 표시 벡터와 반대일 때만 180도 뒤집는 방식으로 변경한다.
+- helper 메서드는 Harmony patch class 밖의 `PingProjectionHelpers`로 분리해 Harmony analyzer 오인 경고를 피한다.
+- 빌드 확인: C# 컴파일과 DLL 생성 성공. 기존 `InputTracking.Recenter()` obsolete 경고 1개만 남음.
+
+### 2026-05-18 6차 적용
+
+- `Settings.PingVerticalOffset` 추가 및 `핑 상하 위치 조정` 슬라이더 추가.
+- 검증 완료된 움직임 배율 기본값 좌우 1.85, 상하 3.5는 유지.
+- 기존 `핑 좌우/상하 위치 보정` 라벨을 `핑 좌우/상하 움직임 배율`로 변경.
+- `Settings.PingDebugLogs` 추가 및 디버그 옵션에 `핑 디버그 로그` 토글 추가.
+- `[VRHud/Ping]` 상세 로그 추가. 로그는 arrow가 켜진 ping 중심으로 제한 출력하고, `tools/vrhud_log_extract.py` 기본 패턴에도 포함한다.
+- 화살표는 이번 단계에서 더 이상 강제 보정하지 않고, 원본 각도 기준 `wouldFlip` 진단값만 남긴다.
+- 빌드 확인: C# 컴파일과 DLL 생성 성공. 기존 `InputTracking.Recenter()` obsolete 경고 1개만 남음.
+
+### 2026-05-18 7차 적용
+
+- 사용자 확인: `핑 상하 위치 조정`은 정상 작동한다. 좌우/상하 움직임 배율은 최적값을 찾았으므로 옵션에서 제거한다.
+- 최신 `[VRHud/Ping]` 로그 분석 결과, 좌우 부호 자체는 맞다. `side=right`는 대체로 0도 근처, `side=left`는 180도 근처로 기록되어 수학적 좌우 판정은 뒤집혀 있지 않다.
+- 그러나 현재 `PingProjectionScaleFixer`는 원본 `uGUI_Pings.OnWillRenderCanvases()`가 계산한 위치/각도 이후에 `anchoredPosition`만 다시 보정하고, 화살표 각도를 최종 보정 좌표 기준으로 다시 계산하지 않는다.
+- 로그상 보정 후 `adjRel` 기준 목표 각도와 실제 `arrow.rectTransform.rotation.z` 사이에 최대 약 27도 차이가 있다. 특히 상하 배율과 edge clamp가 적용된 대각선 가장자리에서 차이가 커진다.
+- 수정:
+  - `uGUI_Pings.OnWillRenderCanvases`는 계속 패치하지 않는다. 이 메서드 패치는 컨트롤러 입력이 사라지는 부작용이 있었다.
+  - `uGUI_Ping.SetScale` Postfix에서 최종 `adjustedRelative` 기준 `atan2(y,x)` 각도를 계산하고 `uGUI_Ping.SetAngle()`을 다시 호출한다.
+  - IL 확인 결과 `SetAngle()`은 `SetScale()`을 다시 호출하지 않으므로 재귀 위험은 없다. 단, 음수 각도를 받으면 화살표를 disable하므로 `atan2` 결과는 0~360도로 정규화해서 넘긴다.
+  - 검증된 움직임 배율은 옵션에서 제거하고, 런타임 계산은 고정값 좌우 1.85 / 상하 3.5를 사용한다. 기존 public 설정 필드는 저장 호환용으로만 남긴다.
+  - `[VRHud/Ping]` 로그에는 `angleBefore`, `targetAngle`, 최종 `angle`, arrow transform scale/euler를 남겨, 그래도 시각 방향이 틀리면 이미지/부모 transform 미러링 여부를 다음 로그에서 바로 판독할 수 있게 한다.
+  - `tools/vrhud_log_extract.py`는 상태 파일 쓰기가 잠겨도 로그 추출 결과 자체는 실패 처리하지 않도록 수정한다.
+- 빌드 확인: C# 컴파일과 DLL/zip 생성 성공. 기존 `InputTracking.Recenter()` obsolete 경고 1개만 남음.
+
+### 2026-05-18 8차 적용
+
+- 사용자 확인: 화살표 방향은 여전히 이상하다. 완전 빌드는 꼭 필요한 시점 또는 최종 적용 시점에만 수행한다.
+- 최신 로그는 전체 로그 앞부분이 아니라 마지막 `[VRHud/Ping]` 구간만 `--pattern "\[VRHud/Ping\]" --last 800`으로 확인한다.
+- 로그 판독:
+  - `targetAngle`과 최종 world `angle`은 일치한다.
+  - 하지만 `arrowLE=(x,y,z)`에서 local X/Y가 10~18도, 120~160도처럼 크게 섞인다.
+  - 원인: 게임 원본 `uGUI_Ping.SetAngle()`은 `arrow.rectTransform.rotation = Quaternion.Euler(0,0,angle)`로 world rotation을 설정한다. 2D overlay에서는 문제가 없지만, VR HUD 캔버스처럼 부모가 3D로 기울어진 상태에서는 화살표가 UI 로컬 평면 기준으로 회전하지 않는다.
+- 수정 계획:
+  - `SetScale` Postfix에서는 기존처럼 최종 `adjustedRelative` 기준 `targetAngle`을 계산한다.
+  - 원본 `SetAngle(targetAngle)`은 화살표 enable 상태 갱신용으로 호출하되, 직후 `arrow.rectTransform.localRotation = Quaternion.Euler(0,0,targetAngle)`로 덮어써 UI 평면 기준 회전을 보장한다.
+  - 로그의 `angle`은 local z 기준으로 바꾸고, `worldAngle`도 함께 남겨 world/local 차이를 다음 로그에서 확인한다.
+- 빌드 정책: 완전 빌드는 최종 적용 시점에만 1회 수행한다. 중간 로그 분석/코드 검토에는 완전 빌드를 반복하지 않는다.
+- 빌드 확인: C# 컴파일과 DLL/zip 생성 성공. 기존 `InputTracking.Recenter()` obsolete 경고 1개만 남음.

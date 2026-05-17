@@ -2184,6 +2184,185 @@ namespace SubmersedVR
         }
     }
 
+    internal static class PingProjectionHelpers
+    {
+        private const float HudCanvasBaseScale = 0.00085f;
+        private const int DebugFrameInterval = 30;
+        public const float HorizontalProjectionScale = 1.85f;
+        public const float VerticalProjectionScale = 3.5f;
+        private static readonly Dictionary<int, PingDebugState> DebugStates = new Dictionary<int, PingDebugState>();
+
+        public struct ArrowDebug
+        {
+            public bool arrowEnabled;
+            public float angleBefore;
+            public float targetAngle;
+            public float angle;
+            public float worldAngle;
+            public float dot;
+            public bool wouldFlip;
+            public Vector2 direction;
+            public Vector3 localEuler;
+            public Vector3 localScale;
+            public Vector3 lossyScale;
+        }
+
+        private struct PingDebugState
+        {
+            public int lastFrame;
+            public float lastAngle;
+            public Vector2 lastAdjustedRelative;
+        }
+
+        public static float GetHudVerticalReferencePixels()
+        {
+            float scale = HudCanvasBaseScale * Mathf.Max(0.05f, Settings.HudScale);
+            return (0.1f + Settings.HudVerticalOffset + Settings.PingVerticalOffset) / scale;
+        }
+
+        public static ArrowDebug ApplyFinalArrowAngle(uGUI_Ping ping, Vector2 adjustedRelative)
+        {
+            var debug = new ArrowDebug
+            {
+                arrowEnabled = ping.arrow != null && ping.arrow.enabled,
+                angleBefore = -1f,
+                targetAngle = -1f,
+                angle = -1f,
+                worldAngle = -1f,
+                dot = 0f,
+                wouldFlip = false,
+                direction = Vector2.zero,
+                localEuler = Vector3.zero,
+                localScale = Vector3.one,
+                lossyScale = Vector3.one
+            };
+
+            if (ping.arrow == null || !ping.arrow.enabled || adjustedRelative.sqrMagnitude <= 0.001f)
+                return debug;
+
+            RectTransform arrowRect = ping.arrow.rectTransform;
+            debug.angleBefore = arrowRect.localEulerAngles.z;
+            debug.targetAngle = Mathf.Atan2(adjustedRelative.y, adjustedRelative.x) * Mathf.Rad2Deg;
+            if (debug.targetAngle < 0f)
+                debug.targetAngle += 360f;
+            ping.SetAngle(debug.targetAngle);
+            arrowRect.localRotation = Quaternion.Euler(0f, 0f, debug.targetAngle);
+            debug.localEuler = arrowRect.localEulerAngles;
+            debug.angle = debug.localEuler.z;
+            debug.worldAngle = arrowRect.rotation.eulerAngles.z;
+            float radians = debug.targetAngle * Mathf.Deg2Rad;
+            debug.direction = new Vector2(Mathf.Cos(radians), Mathf.Sin(radians));
+            debug.dot = Vector2.Dot(debug.direction, adjustedRelative);
+            debug.wouldFlip = debug.dot < 0f;
+            debug.localScale = arrowRect.localScale;
+            debug.lossyScale = arrowRect.lossyScale;
+            return debug;
+        }
+
+        public static void LogDebug(uGUI_Ping ping, Vector2 originalAnchored, Vector2 halfSize,
+            Vector2 displayCenter, float hudRefPx, Vector2 relative, Vector2 adjustedRelative,
+            Vector2 adjusted, float horizontalLimit, float verticalLimit, ArrowDebug arrowDebug)
+        {
+            if (!Settings.PingDebugLogs)
+                return;
+
+            bool atEdge =
+                Mathf.Abs(adjustedRelative.x) >= horizontalLimit - 1f ||
+                Mathf.Abs(adjustedRelative.y) >= verticalLimit - 1f;
+            if (!atEdge && !arrowDebug.arrowEnabled)
+                return;
+
+            int id = ping.GetInstanceID();
+            int frame = Time.frameCount;
+            DebugStates.TryGetValue(id, out PingDebugState state);
+            bool changed =
+                state.lastFrame == 0 ||
+                Mathf.Abs(Mathf.DeltaAngle(state.lastAngle, arrowDebug.angle)) > 15f ||
+                Vector2.Distance(state.lastAdjustedRelative, adjustedRelative) > 40f ||
+                arrowDebug.wouldFlip;
+            if (!changed && frame - state.lastFrame < DebugFrameInterval)
+                return;
+
+            DebugStates[id] = new PingDebugState
+            {
+                lastFrame = frame,
+                lastAngle = arrowDebug.angle,
+                lastAdjustedRelative = adjustedRelative
+            };
+
+            Mod.logger.LogInfo(
+                $"[VRHud/Ping] frame={frame} id={id} side={GetSide(adjustedRelative, horizontalLimit, verticalLimit)} " +
+                $"label='{SafeText(ping.infoText)}' dist='{SafeText(ping.distanceText)}' suffix='{SafeText(ping.suffixText)}' " +
+                $"orig={Fmt(originalAnchored)} half={Fmt(halfSize)} displayCenter={Fmt(displayCenter)} hudRefPx={hudRefPx:F1} " +
+                $"rel={Fmt(relative)} adjRel={Fmt(adjustedRelative)} final={Fmt(adjusted)} " +
+                $"limits=({horizontalLimit:F1},{verticalLimit:F1}) scale=({HorizontalProjectionScale:F2},{VerticalProjectionScale:F2}) " +
+                $"edge=({Settings.PingHorizontalEdgeScale:F2},{Settings.PingVerticalEdgeScale:F2}) pingYOffset={Settings.PingVerticalOffset:F3} " +
+                $"arrow={arrowDebug.arrowEnabled} angleBefore={arrowDebug.angleBefore:F1} targetAngle={arrowDebug.targetAngle:F1} " +
+                $"angle={arrowDebug.angle:F1} worldAngle={arrowDebug.worldAngle:F1} dir={Fmt(arrowDebug.direction)} dot={arrowDebug.dot:F1} wouldFlip={arrowDebug.wouldFlip} " +
+                $"arrowLE={Fmt(arrowDebug.localEuler)} arrowLS={Fmt(arrowDebug.localScale)} arrowLossy={Fmt(arrowDebug.lossyScale)}");
+        }
+
+        private static string SafeText(TMP_Text text)
+        {
+            if (text == null || string.IsNullOrEmpty(text.text))
+                return "";
+            return text.text.Replace("\r", " ").Replace("\n", " ");
+        }
+
+        private static string Fmt(Vector2 value) => $"({value.x:F1},{value.y:F1})";
+
+        private static string Fmt(Vector3 value) => $"({value.x:F2},{value.y:F2},{value.z:F2})";
+
+        private static string GetSide(Vector2 relative, float horizontalLimit, float verticalLimit)
+        {
+            float nx = horizontalLimit > 0f ? Mathf.Abs(relative.x) / horizontalLimit : 0f;
+            float ny = verticalLimit > 0f ? Mathf.Abs(relative.y) / verticalLimit : 0f;
+            if (nx < 0.98f && ny < 0.98f)
+                return "inside";
+            if (nx >= ny)
+                return relative.x < 0f ? "left" : "right";
+            return relative.y < 0f ? "bottom" : "top";
+        }
+    }
+
+    [HarmonyPatch(typeof(uGUI_Ping), nameof(uGUI_Ping.SetScale))]
+    public static class PingProjectionScaleFixer
+    {
+        public static void Postfix(uGUI_Ping __instance)
+        {
+            if (__instance == null ||
+                (Mathf.Approximately(PingProjectionHelpers.HorizontalProjectionScale, 1f) &&
+                 Mathf.Approximately(PingProjectionHelpers.VerticalProjectionScale, 1f) &&
+                 Mathf.Approximately(Settings.PingHorizontalEdgeScale, 1f) &&
+                 Mathf.Approximately(Settings.PingVerticalEdgeScale, 1f)))
+                return;
+
+            RectTransform rectTransform = __instance.rectTransform;
+            if (rectTransform == null || !(rectTransform.parent is RectTransform parentRect))
+                return;
+
+            Vector2 originalAnchored = rectTransform.anchoredPosition;
+            Rect parent = parentRect.rect;
+            Vector2 halfSize = new Vector2(parent.width * 0.5f, parent.height * 0.5f);
+            float hudRefPx = PingProjectionHelpers.GetHudVerticalReferencePixels();
+            Vector2 displayCenter = halfSize + new Vector2(0f, hudRefPx);
+            Vector2 relative = originalAnchored - halfSize;
+            Vector2 adjustedRelative = new Vector2(
+                relative.x * PingProjectionHelpers.HorizontalProjectionScale,
+                relative.y * PingProjectionHelpers.VerticalProjectionScale);
+            float horizontalLimit = halfSize.x * Mathf.Max(0.05f, Settings.PingHorizontalEdgeScale);
+            float verticalLimit = halfSize.y * Mathf.Max(0.05f, Settings.PingVerticalEdgeScale);
+            adjustedRelative.x = Mathf.Clamp(adjustedRelative.x, -horizontalLimit, horizontalLimit);
+            adjustedRelative.y = Mathf.Clamp(adjustedRelative.y, -verticalLimit, verticalLimit);
+            Vector2 adjusted = displayCenter + adjustedRelative;
+            rectTransform.anchoredPosition = adjusted;
+
+            var arrowDebug = PingProjectionHelpers.ApplyFinalArrowAngle(__instance, adjustedRelative);
+            PingProjectionHelpers.LogDebug(__instance, originalAnchored, halfSize, displayCenter, hudRefPx,
+                relative, adjustedRelative, adjusted, horizontalLimit, verticalLimit, arrowDebug);
+        }
+    }
+
     [HarmonyPatch(typeof(uGUI_DepthCompass), nameof(uGUI_DepthCompass.GetDepthInfo))]
     public static class HideDepthCompassWhenHudOff
     {
