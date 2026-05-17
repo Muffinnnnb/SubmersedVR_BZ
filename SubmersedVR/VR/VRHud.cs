@@ -149,6 +149,7 @@ namespace SubmersedVR
             if (canvas == null) return;
             float rPx = curved ? worldRadius / canvasBaseScale : 0f;
             var curveGroups = new HashSet<Transform>();
+            var popupGroups = new HashSet<Transform>();
             foreach (var g in canvas.GetComponentsInChildren<Graphic>(true))
             {
                 if (HudCurveDebug.ShouldSkipCurve(g.transform, canvas.transform))
@@ -166,6 +167,18 @@ namespace SubmersedVR
                     {
                         groupEffect.radiusPixels = rPx;
                         groupEffect.ForceApply();
+                    }
+                }
+
+                Transform popupRoot = HudCurveDebug.GetPopupNotificationRoot(g.transform, canvas.transform);
+                if (popupRoot != null && popupGroups.Add(popupRoot))
+                {
+                    var popupEffect = popupRoot.gameObject.GetOrAddComponent<HudPopupCurveTransformEffect>();
+                    popupEffect.targetCanvas = canvas;
+                    if (popupEffect.radiusPixels != rPx)
+                    {
+                        popupEffect.radiusPixels = rPx;
+                        popupEffect.ForceApply();
                     }
                 }
 
@@ -747,15 +760,63 @@ namespace SubmersedVR
         public static bool IsStatusBarIconPath(Transform transform, Transform stop) =>
             GetStatusBarIconRoot(transform, stop) != null;
 
+        public static Transform GetPopupNotificationRoot(Transform transform, Transform stop)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.parent != null && current.parent != stop && current.parent.name == "PopupNotification")
+                    return current;
+                current = current.parent;
+            }
+            return null;
+        }
+
+        public static Transform GetScannerIconRoot(Transform transform, Transform stop)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.name == "ScannerIcon")
+                    return current;
+                current = current.parent;
+            }
+            return null;
+        }
+
         public static Transform GetCurveTransformRoot(Transform transform, Transform stop)
         {
             Transform statusRoot = GetStatusBarIconRoot(transform, stop);
             if (statusRoot != null) return statusRoot;
+            Transform scannerRoot = GetScannerIconRoot(transform, stop);
+            if (scannerRoot != null) return scannerRoot;
             return null;
         }
 
         public static bool IsCurveTransformPath(Transform transform, Transform stop) =>
             GetCurveTransformRoot(transform, stop) != null;
+
+        public static bool IsPopupNotificationPath(Transform transform, Transform stop) =>
+            GetPopupNotificationRoot(transform, stop) != null;
+
+        public static bool HasPopupVisualRoot(Transform transform, Transform stop)
+        {
+            Transform popupRoot = GetPopupNotificationRoot(transform, stop);
+            var effect = popupRoot != null ? popupRoot.GetComponent<HudPopupCurveTransformEffect>() : null;
+            return effect != null && effect.HasVisualRoot;
+        }
+
+        public static bool HasCurveTransformAncestor(Transform transform, Transform stop)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.GetComponent<HudCurveTransformEffect>() != null)
+                    return true;
+                current = current.parent;
+            }
+            return false;
+        }
 
         public static bool IsAnimationSensitivePath(Transform transform, Transform stop)
         {
@@ -770,7 +831,9 @@ namespace SubmersedVR
                     return true;
                 current = current.parent;
             }
-            return IsCurveTransformPath(transform, stop);
+            return IsPopupNotificationPath(transform, stop) ||
+                   IsCurveTransformPath(transform, stop) ||
+                   HasCurveTransformAncestor(transform, stop);
         }
 
         public static bool IsUnderNamedParent(Transform transform, Transform stop, string parentName)
@@ -785,10 +848,34 @@ namespace SubmersedVR
             return false;
         }
 
+        public static bool IsPowerIndicatorPath(Transform transform, Transform stop)
+        {
+            Transform current = transform;
+            while (current != null && current != stop)
+            {
+                if (current.name.IndexOf("Power", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    current.name.IndexOf("PowerIndicator", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+                current = current.parent;
+            }
+            return false;
+        }
+
         public static bool ShouldSkipCurve(Transform transform, Transform stop)
         {
-            return IsUnderNamedParent(transform, stop, "ScannerIcon") ||
-                   IsUnderNamedParent(transform, stop, "HandReticle");
+            return IsUnderNamedParent(transform, stop, "HandReticle");
+        }
+
+        public static bool IsDescendantOf(Transform transform, Transform ancestor)
+        {
+            Transform current = transform;
+            while (current != null)
+            {
+                if (current == ancestor)
+                    return true;
+                current = current.parent;
+            }
+            return false;
         }
 
         public static string BuildPath(Transform transform, Transform stop)
@@ -850,7 +937,7 @@ namespace SubmersedVR
         void OnDisable()
         {
             Canvas.willRenderCanvases -= OnWillRenderCanvases;
-            RemoveAppliedOffset();
+            RemoveAppliedTransform();
         }
 
         private void OnWillRenderCanvases() => ForceApply();
@@ -858,25 +945,158 @@ namespace SubmersedVR
         public void ForceApply()
         {
             if (cachedTransform == null) cachedTransform = transform;
-            RemoveAppliedOffset();
+            RemoveAppliedTransform();
             if (!enabled || radiusPixels <= 0f || targetCanvas == null || cachedTransform.parent == null) return;
 
-            Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(cachedTransform.position);
-            float angle = pivotCanvas.x / radiusPixels;
+            float anchorCanvasX = targetCanvas.transform.InverseTransformPoint(cachedTransform.position).x;
+            float angle = anchorCanvasX / radiusPixels;
             float targetX = radiusPixels * Mathf.Sin(angle);
             float targetZ = -radiusPixels * (1f - Mathf.Cos(angle));
-            Vector3 canvasDelta = new Vector3(targetX - pivotCanvas.x, 0f, targetZ);
+            Vector3 canvasDelta = new Vector3(targetX - anchorCanvasX, 0f, targetZ);
             Vector3 worldDelta = targetCanvas.transform.TransformVector(canvasDelta);
             appliedLocalOffset = cachedTransform.parent.InverseTransformVector(worldDelta);
             cachedTransform.localPosition += appliedLocalOffset;
         }
 
-        private void RemoveAppliedOffset()
+        private void RemoveAppliedTransform()
         {
             if (cachedTransform == null) cachedTransform = transform;
-            if (appliedLocalOffset == Vector3.zero) return;
-            cachedTransform.localPosition -= appliedLocalOffset;
-            appliedLocalOffset = Vector3.zero;
+            if (appliedLocalOffset != Vector3.zero)
+            {
+                cachedTransform.localPosition -= appliedLocalOffset;
+                appliedLocalOffset = Vector3.zero;
+            }
+        }
+    }
+
+    // Keeps popup notification animation on the original root, while moving only its visual children
+    // onto the curved HUD surface.
+    public class HudPopupCurveTransformEffect : MonoBehaviour
+    {
+        public Canvas targetCanvas;
+        public float radiusPixels = 0f;
+        public Transform visualRoot;
+        private Transform cachedTransform;
+        private float stableCanvasX = float.NaN;
+        private int debugLogCount = 0;
+        private const int MaxDebugLogs = 24;
+        private const float MaxTangentAngle = 1.0471976f; // 60 degrees
+        private const string VisualRootName = "__VRHudPopupCurveVisual";
+
+        public bool HasVisualRoot => visualRoot != null;
+
+        void Awake() => cachedTransform = transform;
+
+        void OnEnable()
+        {
+            Canvas.willRenderCanvases += OnWillRenderCanvases;
+            ForceApply();
+        }
+
+        void OnDisable()
+        {
+            Canvas.willRenderCanvases -= OnWillRenderCanvases;
+            ResetVisualRoot();
+        }
+
+        private void OnWillRenderCanvases() => ForceApply();
+
+        public void ForceApply()
+        {
+            if (cachedTransform == null) cachedTransform = transform;
+            EnsureVisualRoot();
+            if (visualRoot == null) return;
+
+            if (!enabled || radiusPixels <= 0f || targetCanvas == null)
+            {
+                ResetVisualRoot();
+                return;
+            }
+
+            float currentCanvasX = targetCanvas.transform.InverseTransformPoint(cachedTransform.position).x;
+            if (float.IsNaN(stableCanvasX) || Mathf.Abs(currentCanvasX) < Mathf.Abs(stableCanvasX))
+                stableCanvasX = currentCanvasX;
+
+            float anchorAngle = stableCanvasX / radiusPixels;
+            float tangentAngle = Mathf.Clamp(anchorAngle, -MaxTangentAngle, MaxTangentAngle);
+            float targetX = radiusPixels * Mathf.Sin(anchorAngle);
+            float targetZ = -radiusPixels * (1f - Mathf.Cos(anchorAngle));
+            Vector3 canvasDelta = new Vector3(targetX - stableCanvasX, 0f, targetZ);
+            Vector3 worldDelta = targetCanvas.transform.TransformVector(canvasDelta);
+            Vector3 localDelta = cachedTransform.InverseTransformVector(worldDelta);
+
+            visualRoot.localPosition = localDelta;
+            visualRoot.localRotation = Quaternion.Euler(0f, tangentAngle * Mathf.Rad2Deg, 0f);
+            visualRoot.localScale = Vector3.one;
+
+            if (debugLogCount < MaxDebugLogs)
+            {
+                debugLogCount++;
+                Mod.logger.LogInfo(
+                    $"[VRHud/PopupRoot] #{debugLogCount} name='{cachedTransform.name}' currentX={currentCanvasX:F2} stableX={stableCanvasX:F2} " +
+                    $"angle={anchorAngle * Mathf.Rad2Deg:F1} yaw={tangentAngle * Mathf.Rad2Deg:F1} " +
+                    $"offset=({localDelta.x:F2},{localDelta.y:F2},{localDelta.z:F2}) " +
+                    $"path='{HudCurveDebug.BuildPath(cachedTransform, targetCanvas.transform)}'");
+            }
+        }
+
+        private void EnsureVisualRoot()
+        {
+            if (cachedTransform == null) cachedTransform = transform;
+            if (visualRoot == null)
+            {
+                Transform existing = cachedTransform.Find(VisualRootName);
+                if (existing != null)
+                {
+                    visualRoot = existing;
+                }
+                else
+                {
+                    var go = new GameObject(VisualRootName, typeof(RectTransform));
+                    go.layer = cachedTransform.gameObject.layer;
+                    visualRoot = go.transform;
+                    visualRoot.SetParent(cachedTransform, false);
+                    ConfigureVisualRect();
+                }
+            }
+
+            ConfigureVisualRect();
+            for (int i = cachedTransform.childCount - 1; i >= 0; i--)
+            {
+                Transform child = cachedTransform.GetChild(i);
+                if (child == visualRoot)
+                    continue;
+                child.SetParent(visualRoot, false);
+            }
+        }
+
+        private void ConfigureVisualRect()
+        {
+            if (!(visualRoot is RectTransform visualRect))
+                return;
+
+            visualRect.localScale = Vector3.one;
+            if (cachedTransform is RectTransform rootRect)
+            {
+                visualRect.anchorMin = Vector2.zero;
+                visualRect.anchorMax = Vector2.one;
+                visualRect.offsetMin = Vector2.zero;
+                visualRect.offsetMax = Vector2.zero;
+                visualRect.pivot = rootRect.pivot;
+            }
+            else
+            {
+                visualRect.localPosition = Vector3.zero;
+                visualRect.localRotation = Quaternion.identity;
+            }
+        }
+
+        private void ResetVisualRoot()
+        {
+            if (visualRoot == null) return;
+            visualRoot.localPosition = Vector3.zero;
+            visualRoot.localRotation = Quaternion.identity;
+            visualRoot.localScale = Vector3.one;
         }
     }
 
@@ -891,16 +1111,37 @@ namespace SubmersedVR
         private int lastInputVertexCount = 0;
         private int lastSubdivideSegments = 1;
         private const int MaxGraphicDebugLogs = 40;
+        private const float PopupRelativeDepthScale = 1f;
+        private const float PopupMaxTangentAngle = 1.0471976f; // 60 degrees; avoids edge-on popup cards at screen extremes.
         private const int MaxGraphicCurveSegments = 48;
         private const float GraphicCurveSegmentWidth = 16f;
 
         public override void ModifyMesh(VertexHelper vh)
         {
             if (!IsActive() || radiusPixels <= 0f || targetCanvas == null) return;
-
-            if (HudCurveDebug.IsCurveTransformPath(graphic.transform, targetCanvas.transform))
+            if (!HudCurveDebug.IsDescendantOf(graphic.transform, targetCanvas.transform))
             {
-                ModifyMeshRelative(vh);
+                LogDetachedSample();
+                return;
+            }
+
+            Transform popupRoot = HudCurveDebug.GetPopupNotificationRoot(graphic.transform, targetCanvas.transform);
+            if (popupRoot != null)
+            {
+                var popupEffect = popupRoot.GetComponent<HudPopupCurveTransformEffect>();
+                if (popupEffect != null && popupEffect.HasVisualRoot)
+                {
+                    ModifyMeshPopupLocal(vh, popupEffect.visualRoot);
+                    return;
+                }
+                ModifyMeshPopupArc(vh, popupRoot);
+                return;
+            }
+
+            if (HudCurveDebug.IsCurveTransformPath(graphic.transform, targetCanvas.transform) ||
+                HudCurveDebug.HasCurveTransformAncestor(graphic.transform, targetCanvas.transform))
+            {
+                ModifyMeshRelative(vh, "relative", 1f, null, false, false);
                 return;
             }
 
@@ -957,21 +1198,24 @@ namespace SubmersedVR
             vh.Clear();
             vh.AddUIVertexTriangleStream(verts);
 
-            LogDebugSample(verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+            LogDebugSample("vertex", verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
                 afterMinX, afterMaxX, afterMinZ, afterMaxZ);
         }
 
-        private void ModifyMeshRelative(VertexHelper vh)
+        private void ModifyMeshRelative(VertexHelper vh, string mode, float depthScale, Transform anchorTransform, bool includeAnchorOffset, bool preserveRelativeX)
         {
             float localToCanvasScale = GetLocalToCanvasScale();
             if (Mathf.Approximately(localToCanvasScale, 0f)) return;
 
             Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(graphic.transform.position);
-            float pivotAngle = pivotCanvas.x / radiusPixels;
-            float pivotTargetX = radiusPixels * Mathf.Sin(pivotAngle);
-            float pivotTargetZ = -radiusPixels * (1f - Mathf.Cos(pivotAngle));
-            float pivotDeltaCanvasX = pivotTargetX - pivotCanvas.x;
-            float pivotDeltaCanvasZ = pivotTargetZ;
+            Vector3 anchorCanvas = anchorTransform != null
+                ? targetCanvas.transform.InverseTransformPoint(anchorTransform.position)
+                : pivotCanvas;
+            float anchorAngle = anchorCanvas.x / radiusPixels;
+            float anchorTargetX = radiusPixels * Mathf.Sin(anchorAngle);
+            float anchorTargetZ = -radiusPixels * (1f - Mathf.Cos(anchorAngle));
+            float anchorDeltaCanvasX = anchorTargetX - anchorCanvas.x;
+            float anchorDeltaCanvasZ = anchorTargetZ;
 
             var verts = new System.Collections.Generic.List<UIVertex>();
             vh.GetUIVertexStream(verts);
@@ -1002,8 +1246,12 @@ namespace SubmersedVR
                 float angle = virtualX / radiusPixels;
                 float targetX = radiusPixels * Mathf.Sin(angle);
                 float targetZ = -radiusPixels * (1f - Mathf.Cos(angle));
-                float deltaCanvasX = targetX - virtualX - pivotDeltaCanvasX;
-                float deltaCanvasZ = targetZ - pivotDeltaCanvasZ;
+                float relativeCanvasX = targetX - virtualX - anchorDeltaCanvasX;
+                float relativeCanvasZ = (targetZ - anchorDeltaCanvasZ) * depthScale;
+                float deltaCanvasX = includeAnchorOffset
+                    ? anchorDeltaCanvasX + (preserveRelativeX ? 0f : relativeCanvasX)
+                    : relativeCanvasX;
+                float deltaCanvasZ = includeAnchorOffset ? anchorDeltaCanvasZ + relativeCanvasZ : relativeCanvasZ;
                 v.position = before + new Vector3(deltaCanvasX / localToCanvasScale, 0f, deltaCanvasZ / localToCanvasScale);
 
                 Vector3 after = v.position;
@@ -1025,7 +1273,143 @@ namespace SubmersedVR
             vh.Clear();
             vh.AddUIVertexTriangleStream(verts);
 
-            LogDebugSample(verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+            LogDebugSample(mode, verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+                afterMinX, afterMaxX, afterMinZ, afterMaxZ);
+        }
+
+        private void ModifyMeshPopupArc(VertexHelper vh, Transform anchorTransform)
+        {
+            float localToCanvasScale = GetLocalToCanvasScale();
+            if (Mathf.Approximately(localToCanvasScale, 0f) || anchorTransform == null) return;
+
+            Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(graphic.transform.position);
+            Vector3 anchorCanvas = targetCanvas.transform.InverseTransformPoint(anchorTransform.position);
+            float anchorAngle = anchorCanvas.x / radiusPixels;
+            float tangentAngle = Mathf.Clamp(anchorAngle, -PopupMaxTangentAngle, PopupMaxTangentAngle);
+            float anchorTargetX = radiusPixels * Mathf.Sin(anchorAngle);
+            float anchorTargetZ = -radiusPixels * (1f - Mathf.Cos(anchorAngle));
+            float anchorDeltaCanvasX = anchorTargetX - anchorCanvas.x;
+            float cos = Mathf.Cos(tangentAngle);
+            float sin = Mathf.Sin(tangentAngle);
+
+            var verts = new System.Collections.Generic.List<UIVertex>();
+            vh.GetUIVertexStream(verts);
+            verts = SubdivideMeshByX(verts, localToCanvasScale);
+            bool hasBeforeBounds = false;
+            bool hasAfterBounds = false;
+            float beforeMinX = 0f, beforeMaxX = 0f, beforeMinZ = 0f, beforeMaxZ = 0f;
+            float afterMinX = 0f, afterMaxX = 0f, afterMinZ = 0f, afterMaxZ = 0f;
+            for (int i = 0; i < verts.Count; i++)
+            {
+                UIVertex v = verts[i];
+                Vector3 before = v.position;
+                if (!hasBeforeBounds)
+                {
+                    beforeMinX = beforeMaxX = before.x;
+                    beforeMinZ = beforeMaxZ = before.z;
+                    hasBeforeBounds = true;
+                }
+                else
+                {
+                    beforeMinX = Mathf.Min(beforeMinX, before.x);
+                    beforeMaxX = Mathf.Max(beforeMaxX, before.x);
+                    beforeMinZ = Mathf.Min(beforeMinZ, before.z);
+                    beforeMaxZ = Mathf.Max(beforeMaxZ, before.z);
+                }
+
+                float relativeCanvasX = (pivotCanvas.x - anchorCanvas.x) + before.x * localToCanvasScale;
+                float localAngle = relativeCanvasX / radiusPixels;
+                float localArcX = radiusPixels * Mathf.Sin(localAngle);
+                float localArcZ = -radiusPixels * (1f - Mathf.Cos(localAngle)) * PopupRelativeDepthScale;
+                float rotatedX = cos * localArcX + sin * localArcZ;
+                float rotatedZ = -sin * localArcX + cos * localArcZ;
+                float deltaCanvasX = anchorDeltaCanvasX + rotatedX - relativeCanvasX;
+                float deltaCanvasZ = anchorTargetZ + rotatedZ;
+                v.position = before + new Vector3(deltaCanvasX / localToCanvasScale, 0f, deltaCanvasZ / localToCanvasScale);
+
+                Vector3 after = v.position;
+                if (!hasAfterBounds)
+                {
+                    afterMinX = afterMaxX = after.x;
+                    afterMinZ = afterMaxZ = after.z;
+                    hasAfterBounds = true;
+                }
+                else
+                {
+                    afterMinX = Mathf.Min(afterMinX, after.x);
+                    afterMaxX = Mathf.Max(afterMaxX, after.x);
+                    afterMinZ = Mathf.Min(afterMinZ, after.z);
+                    afterMaxZ = Mathf.Max(afterMaxZ, after.z);
+                }
+                verts[i] = v;
+            }
+            vh.Clear();
+            vh.AddUIVertexTriangleStream(verts);
+
+            LogDebugSample("popupArc", verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
+                afterMinX, afterMaxX, afterMinZ, afterMaxZ);
+        }
+
+        private void ModifyMeshPopupLocal(VertexHelper vh, Transform visualRoot)
+        {
+            float localToVisualScale = GetLocalToAncestorScale(visualRoot);
+            if (Mathf.Approximately(localToVisualScale, 0f) || visualRoot == null) return;
+
+            Vector3 pivotVisual = visualRoot.InverseTransformPoint(graphic.transform.position);
+
+            var verts = new System.Collections.Generic.List<UIVertex>();
+            vh.GetUIVertexStream(verts);
+            verts = SubdivideMeshByX(verts, localToVisualScale);
+            bool hasBeforeBounds = false;
+            bool hasAfterBounds = false;
+            float beforeMinX = 0f, beforeMaxX = 0f, beforeMinZ = 0f, beforeMaxZ = 0f;
+            float afterMinX = 0f, afterMaxX = 0f, afterMinZ = 0f, afterMaxZ = 0f;
+            for (int i = 0; i < verts.Count; i++)
+            {
+                UIVertex v = verts[i];
+                Vector3 before = v.position;
+                if (!hasBeforeBounds)
+                {
+                    beforeMinX = beforeMaxX = before.x;
+                    beforeMinZ = beforeMaxZ = before.z;
+                    hasBeforeBounds = true;
+                }
+                else
+                {
+                    beforeMinX = Mathf.Min(beforeMinX, before.x);
+                    beforeMaxX = Mathf.Max(beforeMaxX, before.x);
+                    beforeMinZ = Mathf.Min(beforeMinZ, before.z);
+                    beforeMaxZ = Mathf.Max(beforeMaxZ, before.z);
+                }
+
+                float cardX = pivotVisual.x + before.x * localToVisualScale;
+                float angle = cardX / radiusPixels;
+                float targetX = radiusPixels * Mathf.Sin(angle);
+                float targetZ = -radiusPixels * (1f - Mathf.Cos(angle));
+                float deltaCanvasX = targetX - cardX;
+                float deltaCanvasZ = targetZ;
+                v.position = before + new Vector3(deltaCanvasX / localToVisualScale, 0f, deltaCanvasZ / localToVisualScale);
+
+                Vector3 after = v.position;
+                if (!hasAfterBounds)
+                {
+                    afterMinX = afterMaxX = after.x;
+                    afterMinZ = afterMaxZ = after.z;
+                    hasAfterBounds = true;
+                }
+                else
+                {
+                    afterMinX = Mathf.Min(afterMinX, after.x);
+                    afterMaxX = Mathf.Max(afterMaxX, after.x);
+                    afterMinZ = Mathf.Min(afterMinZ, after.z);
+                    afterMaxZ = Mathf.Max(afterMaxZ, after.z);
+                }
+                verts[i] = v;
+            }
+            vh.Clear();
+            vh.AddUIVertexTriangleStream(verts);
+
+            LogDebugSample("popupLocal", verts.Count, beforeMinX, beforeMaxX, beforeMinZ, beforeMaxZ,
                 afterMinX, afterMaxX, afterMinZ, afterMaxZ);
         }
 
@@ -1040,6 +1424,18 @@ namespace SubmersedVR
                 current = current.parent;
             }
             return scale;
+        }
+
+        private float GetLocalToAncestorScale(Transform ancestor)
+        {
+            float scale = 1f;
+            Transform current = graphic.transform;
+            while (current != null && current != ancestor)
+            {
+                scale *= current.localScale.x;
+                current = current.parent;
+            }
+            return current == ancestor ? scale : 0f;
         }
 
         private System.Collections.Generic.List<UIVertex> SubdivideMeshByX(System.Collections.Generic.List<UIVertex> source, float localToCanvasScale)
@@ -1161,7 +1557,16 @@ namespace SubmersedVR
             return v;
         }
 
-        private void LogDebugSample(int vertexCount,
+        private void LogDetachedSample()
+        {
+            if (debugPathLogged || targetCanvas == null) return;
+            debugPathLogged = true;
+            Mod.logger.LogInfo(
+                $"[VRHud/Graphic] detached skip type='{graphic.GetType().Name}' name='{graphic.name}' " +
+                $"targetCanvas='{targetCanvas.name}' path='{HudCurveDebug.BuildPath(graphic.transform, targetCanvas.transform)}'");
+        }
+
+        private void LogDebugSample(string mode, int vertexCount,
             float beforeMinX, float beforeMaxX, float beforeMinZ, float beforeMaxZ,
             float afterMinX, float afterMaxX, float afterMinZ, float afterMaxZ)
         {
@@ -1171,7 +1576,9 @@ namespace SubmersedVR
                 HudCurveDebug.IsUnderNamedParent(graphic.transform, targetCanvas.transform, "PinnedRecipes") ||
                 HudCurveDebug.IsUnderNamedParent(graphic.transform, targetCanvas.transform, "TalkingHead") ||
                 HudCurveDebug.IsUnderNamedParent(graphic.transform, targetCanvas.transform, "SubtitleCanvas") ||
-                lastSubdivideSegments > 1;
+                HudCurveDebug.IsPopupNotificationPath(graphic.transform, targetCanvas.transform) ||
+                HudCurveDebug.IsCurveTransformPath(graphic.transform, targetCanvas.transform) ||
+                HudCurveDebug.IsPowerIndicatorPath(graphic.transform, targetCanvas.transform);
             if (!interestingPath) return;
             debugLogCount++;
 
@@ -1182,9 +1589,10 @@ namespace SubmersedVR
                 $"[VRHud/Graphic] #{debugLogCount} type='{graphic.GetType().Name}' name='{graphic.name}' parent='{parentName}' " +
                 $"radius={radiusPixels:F2} pivot=({pivotCanvas.x:F2},{pivotCanvas.y:F2},{pivotCanvas.z:F2}) " +
                 $"euler=({graphic.transform.localEulerAngles.x:F1},{graphic.transform.localEulerAngles.y:F1},{graphic.transform.localEulerAngles.z:F1}) " +
-                $"dot={facingDot:F3} verts={lastInputVertexCount}->{vertexCount} segments={lastSubdivideSegments} mode=vertex " +
+                $"dot={facingDot:F3} verts={lastInputVertexCount}->{vertexCount} segments={lastSubdivideSegments} mode={mode} " +
                 $"beforeX=({beforeMinX:F2},{beforeMaxX:F2}) beforeZ=({beforeMinZ:F2},{beforeMaxZ:F2}) " +
-                $"afterX=({afterMinX:F2},{afterMaxX:F2}) afterZ=({afterMinZ:F2},{afterMaxZ:F2})");
+                $"afterX=({afterMinX:F2},{afterMaxX:F2}) afterZ=({afterMinZ:F2},{afterMaxZ:F2}) " +
+                $"span=({afterMaxX - afterMinX:F2},{afterMaxZ - afterMinZ:F2})");
 
             if (!debugPathLogged)
             {
@@ -1209,9 +1617,15 @@ namespace SubmersedVR
         private bool applying = false;
         private float lastPivotCanvasX = float.NaN;
         private int debugLogCount = 0;
+        private int restoreLogCount = 0;
         private const int MaxDebugLogs = 16;
+        private const int MaxRestoreLogs = 16;
+        private const float PopupRelativeDepthScale = 1f;
+        private const float PopupMaxTangentAngle = 1.0471976f; // 60 degrees; keeps popup text readable near screen edges.
         private Vector3[][] sourceVertices = null;
         private bool debugPathLogged = false;
+        private bool meshRestored = false;
+        private bool hiddenMeshCleared = false;
 
         void Awake() => tmp = GetComponent<TMPro.TextMeshProUGUI>();
 
@@ -1226,11 +1640,27 @@ namespace SubmersedVR
         {
             Canvas.willRenderCanvases -= OnWillRenderCanvases;
             TMPro.TMPro_EventManager.TEXT_CHANGED_EVENT.Remove(OnTextChanged);
+            RestoreMesh("disable");
         }
 
         private void OnWillRenderCanvases()
         {
-            if (radiusPixels <= 0f || targetCanvas == null || tmp == null) return;
+            if (tmp == null) return;
+            if (!tmp.isActiveAndEnabled)
+            {
+                ClearHiddenMesh("willRenderHidden");
+                return;
+            }
+            if (radiusPixels <= 0f || targetCanvas == null)
+            {
+                RestoreMesh("willRenderInactive");
+                return;
+            }
+            if (!HudCurveDebug.IsDescendantOf(tmp.transform, targetCanvas.transform))
+            {
+                RestoreMesh("willRenderDetached");
+                return;
+            }
             // Only trigger on pivot canvas-x change — ignore pure rotation (flip animations)
             float pivotX = targetCanvas.transform.InverseTransformPoint(tmp.transform.position).x;
             if (!Mathf.Approximately(pivotX, lastPivotCanvasX))
@@ -1249,35 +1679,95 @@ namespace SubmersedVR
         public void ForceApply(string reason = "force")
         {
             if (tmp == null) return;
+            if (!tmp.isActiveAndEnabled)
+            {
+                ClearHiddenMesh(reason + "Hidden");
+                return;
+            }
+            if (radiusPixels <= 0f || targetCanvas == null)
+            {
+                RestoreMesh(reason);
+                return;
+            }
+            if (!HudCurveDebug.IsDescendantOf(tmp.transform, targetCanvas.transform))
+            {
+                LogDetachedSample(reason);
+                RestoreMesh(reason + "Detached");
+                return;
+            }
             // Update lastPivotCanvasX before ForceMeshUpdate to prevent OnWillRenderCanvases re-triggering
-            if (targetCanvas != null)
-                lastPivotCanvasX = targetCanvas.transform.InverseTransformPoint(tmp.transform.position).x;
+            lastPivotCanvasX = targetCanvas.transform.InverseTransformPoint(tmp.transform.position).x;
             applying = true;
             tmp.ForceMeshUpdate();
             applying = false;
+            meshRestored = false;
+            hiddenMeshCleared = false;
             CaptureSourceVertices();
             ApplyToMesh(reason);
         }
 
         private void ApplyToMesh(string reason)
         {
-            if (!enabled || radiusPixels <= 0f || targetCanvas == null || tmp == null) return;
+            if (!enabled || radiusPixels <= 0f || targetCanvas == null || tmp == null)
+            {
+                RestoreMesh(reason);
+                return;
+            }
+            if (!tmp.isActiveAndEnabled)
+            {
+                ClearHiddenMesh(reason + "Hidden");
+                return;
+            }
+            if (!HudCurveDebug.IsDescendantOf(tmp.transform, targetCanvas.transform))
+            {
+                LogDetachedSample(reason);
+                RestoreMesh(reason + "Detached");
+                return;
+            }
 
             // Pivot in canvas space (position only — unaffected by local rotation of TMP)
             Vector3 pivotCanvas = targetCanvas.transform.InverseTransformPoint(tmp.transform.position);
             // Local-to-canvas scale ratio (scale only, rotation ignored)
             float localToCanvasScale = GetLocalToCanvasScale();
             if (Mathf.Approximately(localToCanvasScale, 0f)) return;
-            bool useRelativeCurve = IsAnimationSensitiveText();
-            float pivotDeltaCanvasX = 0f;
-            float pivotDeltaCanvasZ = 0f;
+            Transform popupRoot = HudCurveDebug.GetPopupNotificationRoot(tmp.transform, targetCanvas.transform);
+            var popupEffect = popupRoot != null ? popupRoot.GetComponent<HudPopupCurveTransformEffect>() : null;
+            bool usePopupLocal = popupEffect != null && popupEffect.HasVisualRoot;
+            bool usePopupArc = popupRoot != null && !usePopupLocal;
+            bool useRelativeCurve = !usePopupArc && IsAnimationSensitiveText();
+            float anchorDeltaCanvasX = 0f;
+            float anchorDeltaCanvasZ = 0f;
+            Vector3 popupAnchorCanvas = Vector3.zero;
+            float popupAnchorTargetZ = 0f;
+            float popupCos = 1f;
+            float popupSin = 0f;
+            float localToVisualScale = 0f;
+            Vector3 popupPivotVisual = Vector3.zero;
+            if (usePopupLocal)
+            {
+                localToVisualScale = GetLocalToAncestorScale(popupEffect.visualRoot);
+                if (Mathf.Approximately(localToVisualScale, 0f)) return;
+                popupPivotVisual = popupEffect.visualRoot.InverseTransformPoint(tmp.transform.position);
+            }
+            if (usePopupArc)
+            {
+                popupAnchorCanvas = targetCanvas.transform.InverseTransformPoint(popupRoot.position);
+                float popupAnchorAngle = popupAnchorCanvas.x / radiusPixels;
+                float popupTangentAngle = Mathf.Clamp(popupAnchorAngle, -PopupMaxTangentAngle, PopupMaxTangentAngle);
+                float popupAnchorTargetX = radiusPixels * Mathf.Sin(popupAnchorAngle);
+                popupAnchorTargetZ = -radiusPixels * (1f - Mathf.Cos(popupAnchorAngle));
+                anchorDeltaCanvasX = popupAnchorTargetX - popupAnchorCanvas.x;
+                popupCos = Mathf.Cos(popupTangentAngle);
+                popupSin = Mathf.Sin(popupTangentAngle);
+            }
             if (useRelativeCurve)
             {
-                float pivotAngle = pivotCanvas.x / radiusPixels;
-                float pivotTargetX = radiusPixels * Mathf.Sin(pivotAngle);
-                float pivotTargetZ = -radiusPixels * (1f - Mathf.Cos(pivotAngle));
-                pivotDeltaCanvasX = pivotTargetX - pivotCanvas.x;
-                pivotDeltaCanvasZ = pivotTargetZ;
+                Vector3 anchorCanvas = pivotCanvas;
+                float anchorAngle = anchorCanvas.x / radiusPixels;
+                float anchorTargetX = radiusPixels * Mathf.Sin(anchorAngle);
+                float anchorTargetZ = -radiusPixels * (1f - Mathf.Cos(anchorAngle));
+                anchorDeltaCanvasX = anchorTargetX - anchorCanvas.x;
+                anchorDeltaCanvasZ = anchorTargetZ;
             }
 
             var textInfo = tmp.textInfo;
@@ -1331,16 +1821,37 @@ namespace SubmersedVR
                     float deltaCanvasX = targetX - virtualX;
                     float deltaCanvasZ = targetZ;  // straight z is 0
 
-                    if (useRelativeCurve)
+                    if (usePopupLocal)
+                    {
+                        float cardX = popupPivotVisual.x + before.x * localToVisualScale;
+                        float localAngle = cardX / radiusPixels;
+                        float localTargetX = radiusPixels * Mathf.Sin(localAngle);
+                        float localTargetZ = -radiusPixels * (1f - Mathf.Cos(localAngle));
+                        deltaCanvasX = localTargetX - cardX;
+                        deltaCanvasZ = localTargetZ;
+                    }
+                    else if (usePopupArc)
+                    {
+                        float relativeCanvasX = (pivotCanvas.x - popupAnchorCanvas.x) + before.x * localToCanvasScale;
+                        float localAngle = relativeCanvasX / radiusPixels;
+                        float localArcX = radiusPixels * Mathf.Sin(localAngle);
+                        float localArcZ = -radiusPixels * (1f - Mathf.Cos(localAngle)) * PopupRelativeDepthScale;
+                        float rotatedX = popupCos * localArcX + popupSin * localArcZ;
+                        float rotatedZ = -popupSin * localArcX + popupCos * localArcZ;
+                        deltaCanvasX = anchorDeltaCanvasX + rotatedX - relativeCanvasX;
+                        deltaCanvasZ = popupAnchorTargetZ + rotatedZ;
+                    }
+                    else if (useRelativeCurve)
                     {
                         // Keep the animated object's local pivot stable. Only preserve the
                         // character-relative bend, so flip/swap animations do not orbit around
                         // the cylinder depth offset.
-                        deltaCanvasX -= pivotDeltaCanvasX;
-                        deltaCanvasZ -= pivotDeltaCanvasZ;
+                        deltaCanvasX -= anchorDeltaCanvasX;
+                        deltaCanvasZ -= anchorDeltaCanvasZ;
                     }
 
-                    verts[v] = before + new Vector3(deltaCanvasX / localToCanvasScale, 0f, deltaCanvasZ / localToCanvasScale);
+                    float applyScale = usePopupLocal ? localToVisualScale : localToCanvasScale;
+                    verts[v] = before + new Vector3(deltaCanvasX / applyScale, 0f, deltaCanvasZ / applyScale);
 
                     Vector3 after = verts[v];
                     if (!hasAfterBounds)
@@ -1365,11 +1876,83 @@ namespace SubmersedVR
                 afterMinX, afterMaxX, afterMinZ, afterMaxZ);
         }
 
+        private void LogDetachedSample(string reason)
+        {
+            if (debugPathLogged || targetCanvas == null) return;
+            debugPathLogged = true;
+            Mod.logger.LogInfo(
+                $"[VRHud/TMP] detached skip reason={reason} name='{tmp.name}' targetCanvas='{targetCanvas.name}' " +
+                $"path='{HudCurveDebug.BuildPath(tmp.transform, targetCanvas.transform)}'");
+        }
+
+        private void RestoreMesh(string reason)
+        {
+            if (tmp == null) return;
+            if (!tmp.isActiveAndEnabled)
+            {
+                ClearHiddenMesh(reason + "Hidden");
+                return;
+            }
+            if (meshRestored && reason.StartsWith("willRender"))
+                return;
+            applying = true;
+            tmp.ForceMeshUpdate(true, true);
+            applying = false;
+            sourceVertices = null;
+            lastPivotCanvasX = float.NaN;
+            meshRestored = true;
+            hiddenMeshCleared = false;
+            LogRestoreSample(reason);
+        }
+
+        private void ClearHiddenMesh(string reason)
+        {
+            if (tmp == null) return;
+            if (hiddenMeshCleared && reason.StartsWith("willRender"))
+                return;
+            applying = true;
+            tmp.ClearMesh(true);
+            if (tmp.canvasRenderer != null)
+                tmp.canvasRenderer.Clear();
+            applying = false;
+            sourceVertices = null;
+            lastPivotCanvasX = float.NaN;
+            meshRestored = true;
+            hiddenMeshCleared = true;
+            LogRestoreSample(reason);
+        }
+
+        private void LogRestoreSample(string reason)
+        {
+            if (restoreLogCount >= MaxRestoreLogs || tmp == null) return;
+            string text = tmp.text ?? "";
+            bool isPowerText = text.Contains("전력") || text.IndexOf("Power", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool isPowerPath = targetCanvas != null && HudCurveDebug.IsPowerIndicatorPath(tmp.transform, targetCanvas.transform);
+            if (!isPowerText && !isPowerPath) return;
+
+            restoreLogCount++;
+            string path = targetCanvas != null
+                ? HudCurveDebug.BuildPath(tmp.transform, targetCanvas.transform)
+                : HudCurveDebug.BuildPath(tmp.transform, null);
+            Mod.logger.LogInfo(
+                $"[VRHud/TMPRestore] #{restoreLogCount} reason={reason} name='{tmp.name}' text='{text}' " +
+                $"active={tmp.gameObject.activeInHierarchy} path='{path}'");
+        }
+
         private void LogDebugSample(string reason, Vector3 pivotCanvas, float localToCanvasScale, int vertexCount,
             float beforeMinX, float beforeMaxX, float beforeMinZ, float beforeMaxZ,
             float afterMinX, float afterMaxX, float afterMinZ, float afterMaxZ)
         {
-            if (debugLogCount >= MaxDebugLogs || vertexCount <= 0) return;
+            if (debugLogCount >= MaxDebugLogs || vertexCount <= 0 || targetCanvas == null) return;
+            bool interestingPath =
+                HudCurveDebug.IsStatusIconPath(tmp.transform, targetCanvas.transform) ||
+                HudCurveDebug.IsUnderNamedParent(tmp.transform, targetCanvas.transform, "PinnedRecipes") ||
+                HudCurveDebug.IsUnderNamedParent(tmp.transform, targetCanvas.transform, "TalkingHead") ||
+                HudCurveDebug.IsUnderNamedParent(tmp.transform, targetCanvas.transform, "SubtitleCanvas") ||
+                HudCurveDebug.IsPopupNotificationPath(tmp.transform, targetCanvas.transform) ||
+                HudCurveDebug.IsCurveTransformPath(tmp.transform, targetCanvas.transform) ||
+                HudCurveDebug.IsPowerIndicatorPath(tmp.transform, targetCanvas.transform);
+            if (!interestingPath) return;
             debugLogCount++;
 
             string parentName = tmp.transform.parent != null ? tmp.transform.parent.name : "<none>";
@@ -1378,16 +1961,23 @@ namespace SubmersedVR
             if (text.Length > 32) text = text.Substring(0, 32);
 
             float facingDot = Vector3.Dot(tmp.transform.forward, targetCanvas.transform.forward);
+            string mode = HudCurveDebug.IsPopupNotificationPath(tmp.transform, targetCanvas.transform)
+                ? (HudCurveDebug.HasPopupVisualRoot(tmp.transform, targetCanvas.transform) ? "popupLocal" : "popupArc")
+                : (IsAnimationSensitiveText() ? "relative" : "vertex");
             Mod.logger.LogInfo(
                 $"[VRHud/TMP] #{debugLogCount} reason={reason} name='{tmp.name}' parent='{parentName}' text='{text}' " +
                 $"radius={radiusPixels:F2} pivot=({pivotCanvas.x:F2},{pivotCanvas.y:F2},{pivotCanvas.z:F2}) " +
                 $"scale={localToCanvasScale:F4} euler=({tmp.transform.localEulerAngles.x:F1},{tmp.transform.localEulerAngles.y:F1},{tmp.transform.localEulerAngles.z:F1}) " +
                 $"dot={facingDot:F3} verts={vertexCount} " +
-                $"mode={(IsAnimationSensitiveText() ? "relative" : "vertex")} " +
+                $"mode={mode} " +
                 $"beforeX=({beforeMinX:F2},{beforeMaxX:F2}) beforeZ=({beforeMinZ:F2},{beforeMaxZ:F2}) " +
-                $"afterX=({afterMinX:F2},{afterMaxX:F2}) afterZ=({afterMinZ:F2},{afterMaxZ:F2})");
+                $"afterX=({afterMinX:F2},{afterMaxX:F2}) afterZ=({afterMinZ:F2},{afterMaxZ:F2}) " +
+                $"span=({afterMaxX - afterMinX:F2},{afterMaxZ - afterMinZ:F2})");
 
-            if (!debugPathLogged && targetCanvas != null && HudCurveDebug.IsStatusIconPath(tmp.transform, targetCanvas.transform))
+            if (!debugPathLogged && targetCanvas != null &&
+                (HudCurveDebug.IsStatusIconPath(tmp.transform, targetCanvas.transform) ||
+                 HudCurveDebug.IsPopupNotificationPath(tmp.transform, targetCanvas.transform) ||
+                 HudCurveDebug.IsPowerIndicatorPath(tmp.transform, targetCanvas.transform)))
             {
                 debugPathLogged = true;
                 Mod.logger.LogInfo(
@@ -1429,6 +2019,18 @@ namespace SubmersedVR
                 current = current.parent;
             }
             return scale;
+        }
+
+        private float GetLocalToAncestorScale(Transform ancestor)
+        {
+            float scale = 1f;
+            Transform current = tmp.transform;
+            while (current != null && current != ancestor)
+            {
+                scale *= current.localScale.x;
+                current = current.parent;
+            }
+            return current == ancestor ? scale : 0f;
         }
 
         private bool IsAnimationSensitiveText()

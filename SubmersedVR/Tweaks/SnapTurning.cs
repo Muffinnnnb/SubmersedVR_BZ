@@ -26,7 +26,161 @@ namespace SubmersedVR
         }
     }
 
+    static class CameraLevelRestore
+    {
+        private const float RestoreSeconds = 0.8f;
+        private const float RestoreSharpness = 22f;
+        private const float FinishAngle = 0.08f;
+        private const int MaxLogCount = 20;
+
+        private static bool hasObservedState = false;
+        private static bool wasCinematicActive = false;
+        private static bool wasVehicleLike = false;
+        private static float restoreUntil = 0f;
+        private static string restoreReason = "";
+        private static bool loggedApply = false;
+        private static int logCount = 0;
+
+        public static void Observe(bool cinematicActive, bool vehicleLike)
+        {
+            if (!hasObservedState)
+            {
+                hasObservedState = true;
+                wasCinematicActive = cinematicActive;
+                wasVehicleLike = vehicleLike;
+                return;
+            }
+
+            if (wasCinematicActive && !cinematicActive)
+            {
+                Request("cinematicEnd");
+            }
+            if (wasVehicleLike != vehicleLike)
+            {
+                Request(vehicleLike ? "vehicleEnter" : "vehicleExit");
+            }
+
+            wasCinematicActive = cinematicActive;
+            wasVehicleLike = vehicleLike;
+        }
+
+        public static void Request(string reason)
+        {
+            restoreUntil = Mathf.Max(restoreUntil, Time.time + RestoreSeconds);
+            restoreReason = reason;
+            loggedApply = false;
+            Log($"request reason={reason}");
+        }
+
+        public static void ApplyIfNeeded(MainCameraControl camera, bool canApply)
+        {
+            if (camera == null || Time.time > restoreUntil)
+                return;
+            if (!canApply || IsCinematicActive(camera))
+                return;
+
+            float t = Mathf.Clamp01(Time.deltaTime * RestoreSharpness);
+            camera.rotationY = LevelAngle(camera.rotationY, t);
+            camera.camRotationY = LevelAngle(camera.camRotationY, t);
+
+            camera.transform.localEulerAngles = LevelPitchRoll(camera.transform.localEulerAngles, t, true);
+            if (camera.cameraUPTransform != null)
+                camera.cameraUPTransform.localEulerAngles = LevelPitchRoll(camera.cameraUPTransform.localEulerAngles, t, false);
+            if (camera.cameraOffsetTransform != null)
+                camera.cameraOffsetTransform.localEulerAngles = LevelPitchRoll(camera.cameraOffsetTransform.localEulerAngles, t, false);
+            if (camera.viewModel != null)
+                camera.viewModel.localEulerAngles = LevelPitchRoll(camera.viewModel.localEulerAngles, t, true);
+
+            if (!loggedApply)
+            {
+                loggedApply = true;
+                Log($"apply reason={restoreReason} main={FormatEuler(camera.transform.localEulerAngles)} " +
+                    $"up={(camera.cameraUPTransform != null ? FormatEuler(camera.cameraUPTransform.localEulerAngles) : "<null>")} " +
+                    $"offset={(camera.cameraOffsetTransform != null ? FormatEuler(camera.cameraOffsetTransform.localEulerAngles) : "<null>")}");
+            }
+
+            if (IsLevel(camera))
+            {
+                restoreUntil = 0f;
+                Log($"done reason={restoreReason}");
+            }
+        }
+
+        private static bool IsCinematicActive(MainCameraControl camera)
+        {
+            return camera.cinematicMode ||
+                   Player.main?.cinematicModeActive == true ||
+                   Player.main?._cinematicModeActive == true;
+        }
+
+        private static Vector3 LevelPitchRoll(Vector3 euler, float t, bool preserveYaw)
+        {
+            return new Vector3(
+                LevelAngle(euler.x, t),
+                preserveYaw ? euler.y : LevelAngle(euler.y, t),
+                LevelAngle(euler.z, t));
+        }
+
+        private static float LevelAngle(float angle, float t)
+        {
+            float result = Mathf.LerpAngle(angle, 0f, t);
+            return Mathf.Abs(Mathf.DeltaAngle(result, 0f)) < FinishAngle ? 0f : result;
+        }
+
+        private static bool IsLevel(MainCameraControl camera)
+        {
+            return Mathf.Abs(Mathf.DeltaAngle(camera.rotationY, 0f)) < FinishAngle &&
+                   Mathf.Abs(Mathf.DeltaAngle(camera.camRotationY, 0f)) < FinishAngle &&
+                   IsPitchRollLevel(camera.transform) &&
+                   (camera.cameraUPTransform == null || IsEulerLevel(camera.cameraUPTransform.localEulerAngles, false)) &&
+                   (camera.cameraOffsetTransform == null || IsEulerLevel(camera.cameraOffsetTransform.localEulerAngles, false));
+        }
+
+        private static bool IsPitchRollLevel(Transform transform)
+        {
+            return transform == null || IsEulerLevel(transform.localEulerAngles, true);
+        }
+
+        private static bool IsEulerLevel(Vector3 euler, bool ignoreYaw)
+        {
+            return Mathf.Abs(Mathf.DeltaAngle(euler.x, 0f)) < FinishAngle &&
+                   (ignoreYaw || Mathf.Abs(Mathf.DeltaAngle(euler.y, 0f)) < FinishAngle) &&
+                   Mathf.Abs(Mathf.DeltaAngle(euler.z, 0f)) < FinishAngle;
+        }
+
+        private static string FormatEuler(Vector3 euler)
+        {
+            return $"({euler.x:F1},{euler.y:F1},{euler.z:F1})";
+        }
+
+        private static void Log(string message)
+        {
+            if (logCount >= MaxLogCount)
+                return;
+            logCount++;
+            Mod.logger.LogInfo($"[VRHud/CameraLevel] #{logCount} {message}");
+        }
+    }
+
     #region Patches
+
+    [HarmonyPatch(typeof(PlayerCinematicController), nameof(PlayerCinematicController.EndCinematicMode))]
+    static class CameraLevelRestoreOnCinematicEnd
+    {
+        public static void Postfix()
+        {
+            CameraLevelRestore.Request("EndCinematicMode");
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerCinematicController), nameof(PlayerCinematicController.SkipCinematic))]
+    static class CameraLevelRestoreOnCinematicSkip
+    {
+        public static void Postfix()
+        {
+            CameraLevelRestore.Request("SkipCinematic");
+        }
+    }
 
     [HarmonyPatch(typeof(GameInput), nameof(GameInput.GetLookDelta))]
     public static class SnapTurningGetLookDelta
@@ -230,6 +384,14 @@ namespace SubmersedVR
                     flag2 = (flag2 || flag4);
                 }
             }
+            bool playerCinematicActive = Player.main?.cinematicModeActive == true ||
+                                         Player.main?._cinematicModeActive == true;
+            bool cameraCinematicActive = __instance.cinematicMode || playerCinematicActive;
+            bool vehicleLike = flag3 ||
+                               Player.main?.inExosuit == true ||
+                               Player.main?.inSeatruckPilotingChair == true ||
+                               Player.main?.inHovercraft == true;
+            CameraLevelRestore.Observe(cameraCinematicActive, vehicleLike);
             if (flag2 != __instance.wasInLockedMode || __instance.lookAroundMode != __instance.wasInLookAroundMode)
             {
                 __instance.camRotationX = 0f;
@@ -417,6 +579,11 @@ namespace SubmersedVR
             __instance.viewModel.transform.localEulerAngles = localEulerAngles2;
             __instance.viewModel.transform.localPosition = localPosition2;     
 
+            bool canRestoreCameraLevel = !flag && !cameraCinematicActive &&
+                                         (flag6 || flag3 || AvatarInputHandler.main == null ||
+                                          AvatarInputHandler.main.IsEnabled() || Builder.isPlacing);
+            CameraLevelRestore.ApplyIfNeeded(__instance, canRestoreCameraLevel);
+
             //Fix 1
             if(Player.main.inHovercraft)
             {
@@ -527,4 +694,3 @@ namespace SubmersedVR
     #endregion
 
 }
-
